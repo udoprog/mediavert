@@ -1,0 +1,10 @@
+[package]
+name = "bookvert"
+edition = "2024"
+publish = false
+
+[dependencies]
+anyhow = "1.0.100"
+clap = { version = "4.5.53", features = ["derive"] }
+ignore = "0.4.25"
+zip = "6.0.0"
