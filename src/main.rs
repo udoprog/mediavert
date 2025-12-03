@@ -4,7 +4,7 @@
 //! files, groups them by their directory and creates books out of them.
 
 use core::iter;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{Cursor, Write};
 use std::path::{Path, PathBuf};
@@ -56,7 +56,7 @@ struct Book<'a> {
     path: &'a Path,
     name: &'a str,
     pages: Vec<(PathBuf, String)>,
-    numbers: Vec<i32>,
+    numbers: BTreeSet<u32>,
 }
 
 fn main() -> Result<()> {
@@ -111,7 +111,7 @@ fn main() -> Result<()> {
             path,
             name,
             pages: Vec::new(),
-            numbers: numbers(name).collect::<Vec<_>>(),
+            numbers: numbers(name).collect(),
         });
 
         let Some(ext) = from.extension() else {
@@ -144,56 +144,27 @@ fn main() -> Result<()> {
     let mut by_number = BTreeMap::<_, Vec<_>>::new();
     let mut is_error = false;
 
-    'outer: for book in books.values() {
-        let n = 'out: {
-            match &book.numbers[..] {
-                &[n] => break 'out n,
-                &[n, ..] if opts.first_number => break 'out n,
-                _ => {}
-            }
-
-            is_error = true;
-            o.set_color(&error)?;
-            write!(o, "[error] ")?;
-            o.reset()?;
-
-            if book.numbers.is_empty() {
-                write!(o, "no number")?;
-            } else {
-                let numbers = book
-                    .numbers
-                    .iter()
-                    .map(|n| n.to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ");
-
-                write!(o, "multiple numbers ({numbers}): ")?;
-            }
-
-            writeln!(o, "{}", book.path.display())?;
-            continue 'outer;
-        };
-
-        by_number.entry(n).or_default().push(book);
+    for book in books.values() {
+        for n in book.numbers.iter() {
+            by_number.entry(n).or_default().push(book);
+        }
     }
 
     for (number, books) in &by_number {
-        if books.len() <= 1 {
+        if books.len() <= 1 || opts.first_book || opts.last_book {
             continue;
         }
 
-        if opts.first_book || opts.last_book {
-            continue;
-        }
+        o.set_color(&error)?;
+        write!(o, "[error] ")?;
+        o.reset()?;
+
+        writeln!(o, "{number:03}: more than one book")?;
 
         is_error = true;
 
         for book in books {
-            o.set_color(&error)?;
-            write!(o, "[error] ")?;
-            o.reset()?;
-
-            writeln!(o, "{number:03}: duplicate {}", book.path.display())?;
+            writeln!(o, "  {:?}: {}", book.numbers, book.path.display())?;
         }
     }
 
@@ -282,14 +253,18 @@ fn main() -> Result<()> {
 }
 
 /// Extracts all numbers from the input string as an iterator.
-fn numbers(mut input: &str) -> impl Iterator<Item = i32> {
+fn numbers(mut input: &str) -> impl Iterator<Item = u32> {
     iter::from_fn(move || {
-        let n = input.find(char::is_numeric)?;
-        input = input.get(n..)?;
-        let end = input.find(|c: char| !c.is_numeric()).unwrap_or(input.len());
-        let head;
-        (head, input) = input.split_at_checked(end)?;
-        let number: i32 = head.parse().ok()?;
-        Some(number)
+        loop {
+            let n = input.find(char::is_numeric)?;
+            input = input.get(n..)?;
+            let end = input.find(|c: char| !c.is_numeric()).unwrap_or(input.len());
+            let head;
+            (head, input) = input.split_at_checked(end)?;
+
+            if let Ok(number) = head.parse() {
+                return Some(number);
+            }
+        }
     })
 }
