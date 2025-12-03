@@ -5,12 +5,13 @@
 
 use core::str::FromStr;
 use core::{fmt, iter};
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{Cursor, Write};
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, bail, ensure};
 use clap::Parser;
 use ignore::Walk;
 use regex::Regex;
@@ -25,18 +26,19 @@ struct Opts {
     /// Output directory to write to.
     #[arg(long, default_value = ".")]
     out: PathBuf,
+    /// Rename output files to this name. This is necessary if we are converting
+    /// a series. Otherwise the directory name will be used.
+    #[arg(long)]
+    name: Option<String>,
     /// Overwrite existing files.
     #[arg(long)]
     force: bool,
     /// Perform a trial run with no changes made.
     #[arg(long)]
     dry_run: bool,
-    /// Regular expressions for names to skip.
+    /// Specify a regular expression for a name to skip.
     #[arg(long)]
     skip: Vec<String>,
-    /// Rename output files to this name, if a name cannot be determined.
-    #[arg(long)]
-    rename: Option<String>,
     /// Start numbering from this book when renaming.
     #[arg(long, default_value_t = 1)]
     start_book: usize,
@@ -106,37 +108,86 @@ impl fmt::Display for To {
     }
 }
 
-struct Predicate {
+enum From {
+    Full,
+    Single(u32),
+    RangeInclusive(u32, u32),
+    Range(u32, u32),
+    RangeOpen(u32),
+}
+
+impl From {
+    /// Returns true if the book number matches the predicate.
+    fn matches(&self, number: u32) -> bool {
+        match *self {
+            From::Full => true,
+            From::Single(n) => n == number,
+            From::RangeInclusive(start, end) => (start..=end).contains(&number),
+            From::Range(start, end) => (start..end).contains(&number),
+            From::RangeOpen(start) => (start..).contains(&number),
+        }
+    }
+}
+
+impl FromStr for From {
+    type Err = anyhow::Error;
+
+    #[inline]
+    fn from_str(s: &str) -> Result<Self> {
+        let s = s.trim();
+
+        if s == ".." {
+            return Ok(From::Full);
+        }
+
+        if let Some((from, to)) = s.split_once("..=") {
+            let from = from.trim().parse()?;
+            let to = to.trim().parse()?;
+            return Ok(From::RangeInclusive(from, to));
+        };
+
+        if let Some((from, to)) = s.split_once("..") {
+            let from = from.trim().parse()?;
+            let to = to.trim();
+
+            if to.is_empty() {
+                return Ok(From::RangeOpen(from));
+            }
+
+            let to = to.parse()?;
+            return Ok(From::Range(from, to));
+        };
+
+        Ok(From::Single(s.trim().parse()?))
+    }
+}
+
+struct Match {
     /// The predicate only applies to the specified book number.
-    from: Option<u32>,
-    what: To,
+    from: From,
+    /// The target to pick if the predicate matches.
+    to: To,
 }
 
-struct Pick {
-    predicates: Vec<Predicate>,
+#[derive(Default)]
+struct Picker {
+    matches: Vec<Match>,
+    catch_all: Vec<To>,
 }
 
-impl Pick {
+impl Picker {
     /// Parse a predicate to add to the picker.
     fn parse(&mut self, input: &str) -> Result<()> {
         for p in input.split(',') {
             let p = p.trim();
 
-            if let Some((from, to)) = p.split_once('=') {
+            if let Some((from, to)) = p.rsplit_once('=') {
                 let from = from.trim().parse()?;
                 let to = to.trim().parse()?;
 
-                self.predicates.push(Predicate {
-                    from: Some(from),
-                    what: to,
-                });
+                self.matches.push(Match { from, to });
             } else {
-                let to = p.parse()?;
-
-                self.predicates.push(Predicate {
-                    from: None,
-                    what: to,
-                });
+                self.catch_all.push(p.parse()?);
             }
         }
 
@@ -149,15 +200,17 @@ impl Pick {
             return Some(*book);
         }
 
-        for predicate in &self.predicates {
-            let Some(from) = predicate.from else {
-                return predicate.what.pick(books);
-            };
-
-            if number == from {
-                if let Some(book) = predicate.what.pick(books) {
+        for m in &self.matches {
+            if m.from.matches(number) {
+                if let Some(book) = m.to.pick(books) {
                     return Some(book);
                 }
+            }
+        }
+
+        for what in &self.catch_all {
+            if let Some(book) = what.pick(books) {
+                return Some(book);
             }
         }
 
@@ -179,12 +232,11 @@ fn main() -> Result<()> {
 
     let mut skip = Vec::<Regex>::new();
 
-    let mut pick = Pick {
-        predicates: Vec::new(),
-    };
+    let mut picker = Picker::default();
 
     for predicate in &opts.pick {
-        pick.parse(&predicate)
+        picker
+            .parse(&predicate)
             .with_context(|| anyhow!("Parsing pick predicate '{}'", predicate))?;
     }
 
@@ -240,34 +292,56 @@ fn main() -> Result<()> {
     }
 
     if !skip.is_empty() {
-        books_by_path.retain(|path, _| {
-            for c in path.components() {
-                let name = c.as_os_str().to_string_lossy();
-
-                if skip.iter().any(|re| re.is_match(&name)) {
-                    return false;
-                }
-            }
-
-            true
-        });
+        books_by_path.retain(|_, book| !skip.iter().any(|re| re.is_match(book.name)));
     }
 
     let o = termcolor::StandardStream::stdout(termcolor::ColorChoice::Auto);
     let mut o = o.lock();
 
     let mut by_number = BTreeMap::<_, Vec<_>>::new();
+    let mut names = BTreeSet::new();
 
     for book in books_by_path.values() {
         for &n in book.numbers.iter() {
             by_number.entry(n).or_default().push(book);
         }
+
+        names.insert(book.name);
     }
+
+    let name = 'name: {
+        if let Some(name) = &opts.name {
+            break 'name name.clone();
+        }
+
+        let mut it = names.iter();
+
+        if let Some(first) = it.next() {
+            if it.next().is_none() {
+                break 'name first.to_string();
+            }
+        }
+
+        o.set_color(&error)?;
+        write!(o, "[error] ")?;
+        o.reset()?;
+
+        writeln!(o, "Use `--name <name>` to set one name of the series:")?;
+
+        for name in &names {
+            writeln!(o, "  {}", escape(&name))?;
+        }
+
+        bail!("Aborting due to previous issues.");
+    };
+
+    let mut picked = Vec::new();
+    let mut errors = 0;
 
     for (number, books) in &by_number {
         let number = *number;
 
-        let Some(book) = pick.pick(number, &books) else {
+        let Some(book) = picker.pick(number, &books) else {
             o.set_color(&error)?;
             write!(o, "[error] ")?;
             o.reset()?;
@@ -284,20 +358,18 @@ fn main() -> Result<()> {
                 writeln!(o, "  `-p {number}={pick}`: {}", book.path.display())?;
             }
 
+            errors += 1;
             continue;
         };
 
+        picked.push((number, book));
+    }
+
+    ensure!(errors == 0, "Aborting due to previous issues.");
+
+    for (number, book) in picked {
         let mut target = opts.out.clone();
-
-        match &opts.rename {
-            Some(name) => {
-                target.push(format!("{}{number}", name));
-            }
-            None => {
-                target.push(book.name);
-            }
-        }
-
+        target.push(format!("{name}{number}"));
         target.add_extension("cbz");
 
         let color = if opts.dry_run { &warn } else { &ok };
@@ -375,4 +447,37 @@ fn numbers(mut input: &str) -> impl Iterator<Item = u32> {
             }
         }
     })
+}
+
+fn escape(input: &str) -> Cow<'_, str> {
+    let mut escaped = String::new();
+
+    let n = 'escape: {
+        // If we encounter a character that has to be escaped, copy it to the
+        // escaped string and switch to escaped processing.
+        for (n, c) in input.char_indices() {
+            if !matches!(c, '"' | '\\') && !c.is_whitespace() {
+                continue;
+            }
+
+            escaped.push('"');
+            escaped.push_str(&input[..n]);
+            break 'escape n;
+        }
+
+        return Cow::Borrowed(input);
+    };
+
+    for c in input[n..].chars() {
+        let mut dst = [0u8; 4];
+
+        escaped.push_str(match c {
+            '"' => "\\\"",
+            '\\' => "\\\\",
+            c => c.encode_utf8(&mut dst),
+        });
+    }
+
+    escaped.push('"');
+    Cow::Owned(escaped)
 }
