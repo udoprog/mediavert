@@ -3,7 +3,8 @@
 //! This is a .cbz batch conversion tool which scans directories for image
 //! files, groups them by their directory and creates books out of them.
 
-use core::iter;
+use core::str::FromStr;
+use core::{fmt, iter};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{Cursor, Write};
@@ -42,12 +43,12 @@ struct Opts {
     /// Use the first book found in case of duplicates.
     #[arg(long)]
     first_book: bool,
-    /// Use the last book found in case of duplicates.
-    #[arg(long)]
-    last_book: bool,
-    /// Use the first number found in the directory name.
-    #[arg(long)]
-    first_number: bool,
+    /// When there are more than one book, specify a predicate for how to pick.
+    ///
+    /// Format: `[from=]to` where `from` is an optional book number to match,
+    /// and `to` is one of `first`, `last`, or an exact index (0-based).
+    #[arg(long, short = 'p')]
+    pick: Vec<String>,
     /// Directories to convert.
     path: Vec<PathBuf>,
 }
@@ -57,6 +58,111 @@ struct Book<'a> {
     name: &'a str,
     pages: Vec<(PathBuf, String)>,
     numbers: BTreeSet<u32>,
+}
+
+enum To {
+    First,
+    Last,
+    Exact(usize),
+}
+
+impl To {
+    /// Picks a book from the list according to the strategy.
+    fn pick<'book, 'a>(&self, books: &[&'book Book<'a>]) -> Option<&'book Book<'a>> {
+        match self {
+            To::First => books.first().copied(),
+            To::Last => books.last().copied(),
+            To::Exact(n) => books.get(*n).copied(),
+        }
+    }
+}
+
+impl FromStr for To {
+    type Err = anyhow::Error;
+
+    #[inline]
+    fn from_str(s: &str) -> Result<Self> {
+        match s {
+            "first" => Ok(To::First),
+            "last" => Ok(To::Last),
+            _ => {
+                let n: usize = s
+                    .parse()
+                    .with_context(|| anyhow!("Parsing pick target '{}'", s))?;
+                Ok(To::Exact(n))
+            }
+        }
+    }
+}
+
+impl fmt::Display for To {
+    #[inline]
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            To::First => write!(f, "first"),
+            To::Last => write!(f, "last"),
+            To::Exact(n) => write!(f, "{}", n),
+        }
+    }
+}
+
+struct Predicate {
+    /// The predicate only applies to the specified book number.
+    from: Option<u32>,
+    what: To,
+}
+
+struct Pick {
+    predicates: Vec<Predicate>,
+}
+
+impl Pick {
+    /// Parse a predicate to add to the picker.
+    fn parse(&mut self, input: &str) -> Result<()> {
+        for p in input.split(',') {
+            let p = p.trim();
+
+            if let Some((from, to)) = p.split_once('=') {
+                let from = from.trim().parse()?;
+                let to = to.trim().parse()?;
+
+                self.predicates.push(Predicate {
+                    from: Some(from),
+                    what: to,
+                });
+            } else {
+                let to = p.parse()?;
+
+                self.predicates.push(Predicate {
+                    from: None,
+                    what: to,
+                });
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Returns the index of the book to pick, or None if no predicate matched.
+    fn pick<'book, 'a>(&self, number: u32, books: &[&'book Book<'a>]) -> Option<&'book Book<'a>> {
+        if let [book] = books {
+            return Some(*book);
+        }
+
+        for predicate in &self.predicates {
+            let Some(from) = predicate.from else {
+                return predicate.what.pick(books);
+            };
+
+            if number == from {
+                if let Some(book) = predicate.what.pick(books) {
+                    return Some(book);
+                }
+            }
+        }
+
+        None
+    }
 }
 
 fn main() -> Result<()> {
@@ -72,6 +178,15 @@ fn main() -> Result<()> {
     let opts = Opts::try_parse()?;
 
     let mut skip = Vec::<Regex>::new();
+
+    let mut pick = Pick {
+        predicates: Vec::new(),
+    };
+
+    for predicate in &opts.pick {
+        pick.parse(&predicate)
+            .with_context(|| anyhow!("Parsing pick predicate '{}'", predicate))?;
+    }
 
     for pat in &opts.skip {
         let re = Regex::new(pat).with_context(|| anyhow!("Parsing regex '{}'", pat))?;
@@ -96,7 +211,7 @@ fn main() -> Result<()> {
 
     files.sort();
 
-    let mut books = BTreeMap::<&Path, Book<'_>>::new();
+    let mut books_by_path = BTreeMap::<&Path, Book<'_>>::new();
 
     for from in &files {
         let Some(path) = from.parent() else {
@@ -107,7 +222,7 @@ fn main() -> Result<()> {
             continue;
         };
 
-        let book = books.entry(path).or_insert_with(|| Book {
+        let book = books_by_path.entry(path).or_insert_with(|| Book {
             path,
             name,
             pages: Vec::new(),
@@ -125,7 +240,7 @@ fn main() -> Result<()> {
     }
 
     if !skip.is_empty() {
-        books.retain(|path, _| {
+        books_by_path.retain(|path, _| {
             for c in path.components() {
                 let name = c.as_os_str().to_string_lossy();
 
@@ -142,48 +257,41 @@ fn main() -> Result<()> {
     let mut o = o.lock();
 
     let mut by_number = BTreeMap::<_, Vec<_>>::new();
-    let mut is_error = false;
 
-    for book in books.values() {
-        for n in book.numbers.iter() {
+    for book in books_by_path.values() {
+        for &n in book.numbers.iter() {
             by_number.entry(n).or_default().push(book);
         }
     }
 
     for (number, books) in &by_number {
-        if books.len() <= 1 || opts.first_book || opts.last_book {
+        let number = *number;
+
+        let Some(book) = pick.pick(number, &books) else {
+            o.set_color(&error)?;
+            write!(o, "[error] ")?;
+            o.reset()?;
+
+            writeln!(o, "{number:03}: more than one match, use -p")?;
+
+            for (index, book) in books.iter().enumerate() {
+                let pick = match index {
+                    0 => To::First,
+                    n if n + 1 == books.len() => To::Last,
+                    n => To::Exact(n),
+                };
+
+                writeln!(o, "  `-p {number}={pick}`: {}", book.path.display())?;
+            }
+
             continue;
-        }
-
-        o.set_color(&error)?;
-        write!(o, "[error] ")?;
-        o.reset()?;
-
-        writeln!(o, "{number:03}: more than one book")?;
-
-        is_error = true;
-
-        for book in books {
-            writeln!(o, "  {:?}: {}", book.numbers, book.path.display())?;
-        }
-    }
-
-    if is_error {
-        return Err(anyhow!("Could not unambiguously determine books"));
-    }
-
-    for (n, books) in by_number {
-        let book = match &books[..] {
-            &[.., last] if opts.last_book => last,
-            &[first, ..] => first,
-            _ => continue,
         };
 
         let mut target = opts.out.clone();
 
         match &opts.rename {
             Some(name) => {
-                target.push(format!("{}{n}", name));
+                target.push(format!("{}{number}", name));
             }
             None => {
                 target.push(book.name);
@@ -194,16 +302,16 @@ fn main() -> Result<()> {
 
         let color = if opts.dry_run { &warn } else { &ok };
         o.set_color(color)?;
-        write!(o, "[from] ")?;
+        write!(o, "[from]")?;
         o.reset()?;
 
-        writeln!(o, "{}", book.path.display())?;
+        writeln!(o, " {number:03}: {}", book.path.display())?;
 
         if target.exists() && !opts.force {
             o.set_color(&warn)?;
-            write!(o, "[exists] ")?;
+            write!(o, "  [exists] ")?;
             o.reset()?;
-            writeln!(o, "{} (use --force to overwrite)", target.display())?;
+            writeln!(o, "{} (--force to overwrite)", target.display())?;
             continue;
         }
 
@@ -225,7 +333,7 @@ fn main() -> Result<()> {
 
         if opts.dry_run {
             o.set_color(&warn)?;
-            write!(o, "  [skip] ")?;
+            write!(o, "  [dry-run] ")?;
             o.reset()?;
         } else {
             o.set_color(&ok)?;
