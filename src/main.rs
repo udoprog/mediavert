@@ -38,7 +38,7 @@ struct Opts {
     /// Format: `[from=]to` where `from` is an book number or range to match.
     ///
     /// The range in `from` is specified as `n..m` (exclusive), `n..=m` (inclusive), or `n..` (open-ended) or `..` (all).
-    /// The `to` target can be `first`, `last`, `most-pages`, or a zero-based index for the exact match to pick.
+    /// The `to` target can be `first`, `last`, `most-pages`, a zero-based index, or a regular expression for the exact match to pick.
     ///
     /// Examples:
     /// - `-p most-pages` picks the match with the most pages for all books.
@@ -129,7 +129,7 @@ struct Page {
 }
 
 struct Book<'a> {
-    path: &'a Path,
+    dir: &'a Path,
     name: &'a str,
     pages: Vec<Page>,
     numbers: BTreeSet<u32>,
@@ -150,6 +150,7 @@ enum To {
     Largest,
     Smallest,
     Index(usize),
+    Regex(Regex),
 }
 
 impl To {
@@ -162,6 +163,7 @@ impl To {
             To::Largest => books.iter().max_by_key(|book| book.bytes()).copied(),
             To::Smallest => books.iter().min_by_key(|book| book.bytes()).copied(),
             To::Index(n) => books.get(*n).copied(),
+            To::Regex(re) => books.iter().find(|book| re.is_match(book.name)).copied(),
         }
     }
 }
@@ -177,11 +179,13 @@ impl FromStr for To {
             "most-pages" => Ok(To::MostPages),
             "largest" => Ok(To::Largest),
             "smallest" => Ok(To::Smallest),
-            _ => {
-                let n: usize = s
-                    .parse()
-                    .with_context(|| anyhow!("Parsing pick target '{}'", s))?;
-                Ok(To::Index(n))
+            s => {
+                if let Ok(n) = s.parse::<usize>() {
+                    return Ok(To::Index(n));
+                }
+
+                let re = Regex::new(s).with_context(|| anyhow!("Parsing regex '{s}'"))?;
+                Ok(To::Regex(re))
             }
         }
     }
@@ -197,6 +201,7 @@ impl fmt::Display for To {
             To::Largest => write!(f, "largest"),
             To::Smallest => write!(f, "smallest"),
             To::Index(n) => n.fmt(f),
+            To::Regex(re) => re.fmt(f),
         }
     }
 }
@@ -296,7 +301,6 @@ impl Picker {
             if let Some((from, to)) = p.rsplit_once('=') {
                 let from = from.trim().parse()?;
                 let to = to.trim().parse()?;
-
                 self.matches.push(Match { from, to });
             } else {
                 self.catch_all.push(p.parse()?);
@@ -366,10 +370,10 @@ fn main() -> Result<()> {
 
     let mut picker = Picker::default();
 
-    for predicate in &opts.pick {
+    for pat in &opts.pick {
         picker
-            .parse(predicate)
-            .with_context(|| anyhow!("Parsing pick predicate '{}'", predicate))?;
+            .parse(pat)
+            .with_context(|| anyhow!("Parsing pick predicate '{}'", pat))?;
     }
 
     for pat in &opts.skip {
@@ -414,16 +418,16 @@ fn main() -> Result<()> {
     let mut books_by_path = BTreeMap::<&Path, Book<'_>>::new();
 
     for (from, ext) in &files {
-        let Some(path) = from.parent() else {
+        let Some(dir) = from.parent() else {
             continue;
         };
 
-        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+        let Some(name) = dir.file_name().and_then(|n| n.to_str()) else {
             continue;
         };
 
-        let book = books_by_path.entry(path).or_insert_with(|| Book {
-            path,
+        let book = books_by_path.entry(dir).or_insert_with(|| Book {
+            dir,
             name,
             pages: Vec::new(),
             numbers: numbers(name).collect(),
@@ -453,6 +457,10 @@ fn main() -> Result<()> {
         }
 
         names.insert(book.name);
+    }
+
+    for value in by_number.values_mut() {
+        value.sort_by_key(|book| (book.name, book.dir));
     }
 
     let name = 'name: {
@@ -509,6 +517,13 @@ fn main() -> Result<()> {
                     book.pages.len(),
                     book.bytes(),
                 )?;
+
+                if opts.verbose {
+                    o.set_color(&warn)?;
+                    write!(o, "    [source]")?;
+                    o.reset()?;
+                    writeln!(o, " {}", book.dir.display())?;
+                }
             }
 
             errors += 1;
@@ -530,7 +545,7 @@ fn main() -> Result<()> {
         write!(o, "[from]")?;
         o.reset()?;
 
-        writeln!(o, " {number:03}: {}", book.path.display())?;
+        writeln!(o, " {number:03}: {}", book.dir.display())?;
 
         let comic_info = config_info(&opts, &name, number, book.pages.len())
             .context("ComicInfo.xml generation")?;
