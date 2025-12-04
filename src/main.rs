@@ -13,12 +13,12 @@ use std::fs::{self, Metadata};
 use std::io::{Cursor, Write as _};
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, anyhow, bail, ensure};
+use anyhow::{Context, Result, anyhow};
 use clap::Parser;
 use ignore::Walk;
 use language_tags::LanguageTag;
 use regex::Regex;
-use termcolor::{ColorSpec, WriteColor};
+use termcolor::{ColorSpec, StandardStream, WriteColor};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipWriter};
 
@@ -32,21 +32,9 @@ struct Catalog<'book, 'a> {
 #[derive(Default)]
 struct State<'book, 'a> {
     name: Option<String>,
+    names: Vec<&'a str>,
     catalogs: Vec<Catalog<'book, 'a>>,
     picked: BTreeMap<usize, usize>,
-}
-
-impl<'book, 'a> State<'book, 'a> {
-    /// Returns the next unpicked book number, or None if all are picked.
-    fn next_unpicked(&self) -> Option<(usize, &Catalog<'book, 'a>)> {
-        for (index, catalog) in self.catalogs.iter().enumerate() {
-            if !self.picked.contains_key(&index) {
-                return Some((index, catalog));
-            }
-        }
-
-        None
-    }
 }
 
 /// Helper tool to batch convert files into a .cbr
@@ -488,7 +476,7 @@ fn main() -> Result<()> {
         books_by_path.retain(|_, book| !skip.iter().any(|re| re.is_match(book.name)));
     }
 
-    let o = termcolor::StandardStream::stdout(termcolor::ColorChoice::Auto);
+    let o = StandardStream::stdout(termcolor::ColorChoice::Auto);
     let mut o = o.lock();
 
     let mut by_number = BTreeMap::<_, Vec<_>>::new();
@@ -514,7 +502,10 @@ fn main() -> Result<()> {
         });
     }
 
-    let mut state = State::default();
+    let mut state = State {
+        names: names.iter().copied().collect(),
+        ..State::default()
+    };
 
     for (&number, books) in by_number {
         if books.len() == 1 {
@@ -553,6 +544,8 @@ fn main() -> Result<()> {
     }
 
     if opts.noninteractive {
+        let mut is_error = false;
+
         if state.name.is_none() {
             o.set_color(&error)?;
             write!(o, "[error] ")?;
@@ -563,6 +556,8 @@ fn main() -> Result<()> {
             for name in &names {
                 writeln!(o, "  {}", escape(name))?;
             }
+
+            is_error = true;
         }
 
         for (index, catalog) in state.catalogs.iter().enumerate() {
@@ -596,6 +591,12 @@ fn main() -> Result<()> {
                     writeln!(o, " {}", book.dir.display())?;
                 }
             }
+
+            is_error = true;
+        }
+
+        if is_error {
+            return Err(anyhow!("Aborting due to non-interactive errors."));
         }
     } else {
         let mut app = interactive::App::default();
