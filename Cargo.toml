@@ -11,4 +11,5 @@ language-tags = "0.3.2"
 ratatui = { version = "0.29.0", default-features = false, features = ["crossterm"] }
 regex = "1.12.2"
 termcolor = "1.4.1"
+tui-input = "0.14.0"
 zip = "6.0.0"

@@ -9,8 +9,144 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{
     List, ListItem, ListState, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
 };
+use tui_input::Input;
+use tui_input::backend::crossterm::EventHandler;
 
 use crate::State;
+
+/// Centralized styling configuration for the TUI.
+struct Styles {
+    selected_marker: &'static str,
+    done_marker: &'static str,
+    empty_marker: &'static str,
+    editing_marker: &'static str,
+    color_done: Color,
+    color_normal: Color,
+    color_not_done: Color,
+    color_dim: Color,
+    color_header: Color,
+    color_editing: Color,
+    color_warning: Color,
+}
+
+impl Styles {
+    fn marker(&self, selected: bool, done: bool) -> &'static str {
+        if selected {
+            self.selected_marker
+        } else if done {
+            self.done_marker
+        } else {
+            self.empty_marker
+        }
+    }
+
+    fn item_style(&self, selected: bool, done: bool) -> Style {
+        let mut s = Style::default();
+
+        if done {
+            s = s.fg(self.color_done);
+        } else {
+            s = s.fg(self.color_not_done);
+        };
+
+        if selected {
+            s = s.add_modifier(Modifier::BOLD);
+        }
+
+        s
+    }
+
+    fn normal_item_style(&self, selected: bool, done: bool) -> Style {
+        let mut s = Style::default();
+
+        if done {
+            s = s.fg(self.color_done);
+        } else {
+            s = s.fg(self.color_normal);
+        };
+
+        if selected {
+            s = s.add_modifier(Modifier::BOLD);
+        }
+
+        s
+    }
+
+    fn header_style(&self) -> Style {
+        Style::default().fg(self.color_header).bold()
+    }
+
+    fn header_hint_style(&self) -> Style {
+        Style::default().fg(self.color_header)
+    }
+
+    fn dim_style(&self) -> Style {
+        Style::default().fg(self.color_dim)
+    }
+
+    fn warning_style(&self) -> Style {
+        Style::default().fg(self.color_warning).bold()
+    }
+
+    fn warning_text_style(&self) -> Style {
+        Style::default().fg(self.color_warning)
+    }
+
+    fn button_style(&self, selected: bool, positive: bool) -> Style {
+        let mut s = Style::default();
+
+        if positive {
+            s = s.fg(self.color_done);
+        } else {
+            s = s.fg(self.color_not_done);
+        }
+
+        if selected {
+            s = s.add_modifier(Modifier::BOLD);
+        }
+
+        s
+    }
+
+    fn input_style(&self, selected: bool, editing: bool) -> Style {
+        let mut s = Style::default();
+
+        if editing {
+            s = s.fg(self.color_editing).add_modifier(Modifier::BOLD);
+        } else if selected {
+            s = s.fg(self.color_normal).add_modifier(Modifier::BOLD);
+        } else {
+            s = s.fg(self.color_normal);
+        }
+
+        s
+    }
+
+    fn input_marker(&self, selected: bool, editing: bool) -> &'static str {
+        if editing {
+            self.editing_marker
+        } else if selected {
+            self.selected_marker
+        } else {
+            self.empty_marker
+        }
+    }
+}
+
+/// Global styles instance.
+const STYLES: Styles = Styles {
+    selected_marker: "*",
+    done_marker: "✓",
+    empty_marker: " ",
+    editing_marker: ">",
+    color_done: Color::Green,
+    color_normal: Color::Reset,
+    color_not_done: Color::Red,
+    color_dim: Color::DarkGray,
+    color_header: Color::Cyan,
+    color_editing: Color::Cyan,
+    color_warning: Color::Yellow,
+};
 
 enum ViewEvent {
     PushView(View),
@@ -88,24 +224,11 @@ impl CatalogsView {
             let total_count = state.catalogs.len();
             let all_picked = picked_count == total_count;
 
-            let base_color = if all_picked {
-                Color::Green
-            } else if is_selected {
-                Color::Yellow
-            } else {
-                Color::DarkGray
-            };
-
-            let checkbox = if all_picked { "[x]" } else { "[ ]" };
-
-            let style = if is_selected {
-                Style::default().fg(base_color).add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(base_color)
-            };
+            let marker = STYLES.marker(is_selected, all_picked);
+            let style = STYLES.normal_item_style(is_selected, all_picked);
 
             Line::from(vec![
-                Span::styled(format!("{checkbox} "), style),
+                Span::styled(format!("{marker} "), style),
                 Span::styled(
                     format!("Run bookvert with {picked_count}/{total_count} selected"),
                     style,
@@ -117,21 +240,8 @@ impl CatalogsView {
             let is_selected = self.index == 1;
             let has_name = state.name.is_some();
 
-            let base_color = if has_name {
-                Color::Green
-            } else if is_selected {
-                Color::Yellow
-            } else {
-                Color::Red
-            };
-
-            let checkbox = if has_name { "[x]" } else { "[ ]" };
-
-            let style = if is_selected {
-                Style::default().fg(base_color).add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(base_color)
-            };
+            let marker = STYLES.marker(is_selected, has_name);
+            let style = STYLES.item_style(is_selected, has_name);
 
             let name_display = state
                 .name
@@ -139,7 +249,7 @@ impl CatalogsView {
                 .map(|n| format!("Name: {}", n))
                 .unwrap_or_else(|| "Name: (not set)".to_string());
             Line::from(vec![
-                Span::styled(format!("{checkbox} "), style),
+                Span::styled(format!("{marker} "), style),
                 Span::styled(name_display, style),
             ])
         };
@@ -154,21 +264,8 @@ impl CatalogsView {
                 selected = Some(items.len());
             }
 
-            let base_color = if is_picked {
-                Color::Green
-            } else if is_selected {
-                Color::Yellow
-            } else {
-                Color::Red
-            };
-
-            let checkbox = if is_picked { "[x]" } else { "[ ]" };
-
-            let style = if is_selected {
-                Style::default().fg(base_color).add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(base_color)
-            };
+            let marker = STYLES.marker(is_selected, is_picked);
+            let style = STYLES.item_style(is_selected, is_picked);
 
             let picked_info = if let Some(&book_idx) = state.picked.get(&i) {
                 if let Some(book) = catalog.books.get(book_idx) {
@@ -181,12 +278,12 @@ impl CatalogsView {
             };
 
             let line = Line::from(vec![
-                Span::styled(format!("{checkbox} "), style),
+                Span::styled(format!("{marker} "), style),
                 Span::styled(format!("{:03}", catalog.number), style),
                 Span::styled(picked_info, style),
                 Span::styled(
                     format!(" ({} options)", catalog.books.len()),
-                    Style::default().fg(Color::DarkGray),
+                    STYLES.dim_style(),
                 ),
             ]);
 
@@ -203,10 +300,10 @@ impl CatalogsView {
             .position(self.list_state.selected().unwrap_or_default());
 
         let header = Line::from(vec![
-            Span::styled("Catalogs", Style::default().fg(Color::Cyan).bold()),
+            Span::styled("Catalogs", STYLES.header_style()),
             Span::styled(
                 " (Enter/o/→ to select, Delete/c to clear, Esc/q to quit)",
-                Style::default().fg(Color::Cyan),
+                STYLES.header_hint_style(),
             ),
         ]);
 
@@ -215,7 +312,7 @@ impl CatalogsView {
 
         let separator = Line::from(Span::styled(
             "─".repeat(frame.area().width as usize),
-            Style::default().fg(Color::DarkGray),
+            STYLES.dim_style(),
         ));
 
         let area = frame.area();
@@ -316,24 +413,11 @@ impl BooksView {
                 selected = Some(items.len());
             }
 
-            let base_color = if is_picked {
-                Color::Green
-            } else if is_selected {
-                Color::Yellow
-            } else {
-                Color::Reset
-            };
-
-            let checkbox = if is_picked { "[x]" } else { "[ ]" };
-
-            let style = if is_selected {
-                Style::default().fg(base_color).add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(base_color)
-            };
+            let marker = STYLES.marker(is_selected, is_picked);
+            let style = STYLES.normal_item_style(is_selected, is_picked);
 
             let line = Line::from(vec![
-                Span::styled(format!("{checkbox} "), style),
+                Span::styled(format!("{marker} "), style),
                 Span::styled(
                     format!(
                         "{} ({} pages, {} bytes)",
@@ -350,7 +434,7 @@ impl BooksView {
             if self.expanded.contains(&i) {
                 let path_line = Line::from(Span::styled(
                     format!("    {}", book.dir.display()),
-                    Style::default().fg(Color::DarkGray),
+                    STYLES.dim_style(),
                 ));
                 items.push(ListItem::new(path_line));
             }
@@ -363,10 +447,10 @@ impl BooksView {
 
         let line = format!("Catalog {:03} - Select book", catalog.number);
         let line = Line::from(vec![
-            Span::styled(line, Style::default().fg(Color::Cyan).bold()),
+            Span::styled(line, STYLES.header_style()),
             Span::styled(
                 " (Enter/o to pick, Esc/q/← to go back, i/I to show paths)",
-                Style::default().fg(Color::Cyan),
+                STYLES.header_hint_style(),
             ),
         ]);
 
@@ -384,7 +468,7 @@ impl BooksView {
 
 struct NameView {
     index: usize,
-    input: String,
+    input: Input,
     editing: bool,
     list_state: ListState,
 }
@@ -393,14 +477,14 @@ impl NameView {
     fn new(current_name: Option<&str>) -> Self {
         Self {
             index: 0,
-            input: current_name.unwrap_or_default().to_string(),
+            input: Input::new(current_name.unwrap_or_default().to_string()),
             editing: false,
             list_state: ListState::default(),
         }
     }
 
     fn update(&mut self, key: KeyEvent, state: &mut State) -> ViewEvent {
-        use KeyCode::{Backspace, Char, Down, Enter, Esc, Left, Up};
+        use KeyCode::{Char, Down, Enter, Esc, Left, Up};
 
         let editing = self.editing && self.index == 0;
 
@@ -436,7 +520,7 @@ impl NameView {
             Enter => {
                 if self.index == 0 {
                     if editing {
-                        let trimmed = self.input.trim();
+                        let trimmed = self.input.value().trim();
 
                         state.name = if trimmed.is_empty() {
                             None
@@ -453,11 +537,8 @@ impl NameView {
                     return ViewEvent::PopView;
                 }
             }
-            Backspace if editing => {
-                self.input.pop();
-            }
-            Char(c) if editing => {
-                self.input.push(c);
+            _ if editing => {
+                self.input.handle_event(&Event::Key(key));
             }
             _ => {}
         }
@@ -466,48 +547,38 @@ impl NameView {
     }
 
     fn draw(&mut self, state: &State<'_, '_>, frame: &mut Frame) {
-        let mut items = Vec::new();
-        let mut selected = None;
         let editing = self.editing && self.index == 0;
 
+        let header = Line::from(vec![
+            Span::styled("Set Name", STYLES.header_style()),
+            Span::styled(
+                " (Enter to select, Esc/q/← to go back)",
+                STYLES.header_hint_style(),
+            ),
+        ]);
+
         let is_custom_selected = self.index == 0;
-        if is_custom_selected {
-            selected = Some(0);
-        }
+        let input_marker = STYLES.input_marker(is_custom_selected, editing);
+        let input_style = STYLES.input_style(is_custom_selected, editing);
 
-        let checkbox = if editing {
-            "[>]"
-        } else if is_custom_selected {
-            "[*]"
-        } else {
-            "[ ]"
-        };
-
-        let style = if editing {
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD)
-        } else if is_custom_selected {
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Color::DarkGray)
-        };
-
-        let input_display = if editing {
-            format!("{}_", self.input)
-        } else if self.input.is_empty() {
+        let input_text = if self.input.value().is_empty() && !editing {
             "(enter custom name)".to_string()
         } else {
-            format!("Custom: {}", self.input)
+            self.input.value().to_string()
         };
 
-        let line = Line::from(vec![
-            Span::styled(format!("{checkbox} "), style),
-            Span::styled(input_display, style),
+        let input_line = Line::from(vec![
+            Span::styled(format!("{input_marker} "), input_style),
+            Span::styled(&input_text, input_style),
         ]);
-        items.push(ListItem::new(line));
+
+        let separator = Line::from(Span::styled(
+            "─".repeat(frame.area().width as usize),
+            STYLES.dim_style(),
+        ));
+
+        let mut items = Vec::new();
+        let mut selected = None;
 
         for (i, name) in state.names.iter().enumerate() {
             let is_selected = i.saturating_add(1) == self.index;
@@ -517,24 +588,11 @@ impl NameView {
                 selected = Some(items.len());
             }
 
-            let base_color = if is_current {
-                Color::Green
-            } else if is_selected {
-                Color::Yellow
-            } else {
-                Color::Reset
-            };
-
-            let checkbox = if is_current { "[x]" } else { "[ ]" };
-
-            let style = if is_selected {
-                Style::default().fg(base_color).add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(base_color)
-            };
+            let marker = STYLES.marker(is_selected, is_current);
+            let style = STYLES.normal_item_style(is_selected, is_current);
 
             let line = Line::from(vec![
-                Span::styled(format!("{checkbox} "), style),
+                Span::styled(format!("{marker} "), style),
                 Span::styled(name.to_string(), style),
             ]);
 
@@ -547,22 +605,29 @@ impl NameView {
             .position(self.list_state.selected().unwrap_or_default());
 
         let area = frame.area();
-        let layout = Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).split(area);
+        let layout = Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Min(1),
+        ])
+        .split(area);
 
-        let line = Line::from(vec![
-            Span::styled("Set Name", Style::default().fg(Color::Cyan).bold()),
-            Span::styled(
-                " (Enter to select, Esc/q/← to go back)",
-                Style::default().fg(Color::Cyan),
-            ),
-        ]);
-        frame.render_widget(line, layout[0]);
+        frame.render_widget(header, layout[0]);
+        frame.render_widget(Paragraph::new(input_line), layout[1]);
+        frame.render_widget(separator, layout[2]);
 
         let list = List::new(items);
-        frame.render_stateful_widget(list, layout[1], &mut self.list_state);
+        frame.render_stateful_widget(list, layout[3], &mut self.list_state);
 
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight);
-        frame.render_stateful_widget(scrollbar, layout[1], &mut scrollbar_state);
+        frame.render_stateful_widget(scrollbar, layout[3], &mut scrollbar_state);
+
+        if editing {
+            let cursor_x = layout[1].x + 2 + self.input.visual_cursor() as u16;
+            let cursor_y = layout[1].y;
+            frame.set_cursor_position((cursor_x, cursor_y));
+        }
     }
 }
 
@@ -615,30 +680,17 @@ impl ConfirmView {
         ])
         .split(area);
 
-        let header = Line::from(vec![Span::styled(
-            "⚠ Warning",
-            Style::default().fg(Color::Yellow).bold(),
-        )]);
+        let header = Line::from(vec![Span::styled("⚠ Warning", STYLES.warning_style())]);
 
         let message = Line::from(vec![Span::styled(
             format!("Selection incomplete: {missing} catalog(s) not selected."),
-            Style::default().fg(Color::Yellow),
+            STYLES.warning_text_style(),
         )]);
 
         let prompt = Line::from(vec![Span::styled("Continue anyway? ", Style::default())]);
 
-        let no_style = if !self.selected {
-            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Color::DarkGray)
-        };
-        let yes_style = if self.selected {
-            Style::default()
-                .fg(Color::Green)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Color::DarkGray)
-        };
+        let no_style = STYLES.button_style(!self.selected, false);
+        let yes_style = STYLES.button_style(self.selected, true);
 
         let buttons = Line::from(vec![
             Span::styled("[No/n]", no_style),
@@ -710,14 +762,11 @@ impl App {
                 }
                 ViewEvent::PopAndSelectNext => {
                     self.views.pop();
-                    // Find and select the next unpicked catalog
-                    if let Some(View::Catalogs(v)) = self.views.last_mut() {
-                        if let Some(next) =
+                    if let Some(View::Catalogs(v)) = self.views.last_mut()
+                        && let Some(next) =
                             (0..state.catalogs.len()).find(|i| !state.picked.contains_key(i))
-                        {
-                            // index 0 = Execute, index 1 = Name, index 2+ = catalogs
-                            v.index = next.saturating_add(2);
-                        }
+                    {
+                        v.index = next.saturating_add(2);
                     }
                 }
                 ViewEvent::Finish => {
