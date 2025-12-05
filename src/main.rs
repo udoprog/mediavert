@@ -563,13 +563,13 @@ fn main() -> Result<()> {
 
     let name = state.name.context("No name specified for catalog")?;
 
-    for (c, catalog) in state.catalogs.iter().enumerate() {
-        let Some(book) = catalog.selected() else {
+    for c in &state.catalogs {
+        let Some(book) = c.selected() else {
             continue;
         };
 
         let mut target = opts.out.clone();
-        target.push(format!("{name}{c:03}"));
+        target.push(format!("{name}{:03}", c.number));
         target.add_extension("cbz");
 
         let color = if opts.dry_run { &warn } else { &ok };
@@ -577,10 +577,9 @@ fn main() -> Result<()> {
         write!(o, "[from]")?;
         o.reset()?;
 
-        writeln!(o, " {c:03}: {}", book.dir.display())?;
+        writeln!(o, " {:03}: {}", c.number, book.dir.display())?;
 
-        let comic_info =
-            config_info(&opts, &name, catalog, book).context("ComicInfo.xml generation")?;
+        let comic_info = config_info(&opts, &name, c, book).context("ComicInfo.xml generation")?;
 
         if opts.verbose {
             o.set_color(&ok)?;
