@@ -1,0 +1,20 @@
+[package]
+name = "mediavert"
+version = "0.0.4"
+authors = ["John-John Tedro <udoprog@tedro.se>"]
+edition = "2024"
+description = "A tool to perform batch conversion of media"
+documentation = "https://docs.rs/mediavert"
+readme = "README.md"
+homepage = "https://github.com/udoprog/mediavert"
+repository = "https://github.com/udoprog/mediavert"
+license = "MIT OR Apache-2.0"
+keywords = ["cbz", "cli", "tui"]
+categories = ["command-line-utilities"]
+
+[dependencies]
+bookvert = { path = "../bookvert", version = "0.0.4" }
+audiovert = { path = "../audiovert", version = "0.0.4" }
+
+anyhow.workspace = true
+clap.workspace = true

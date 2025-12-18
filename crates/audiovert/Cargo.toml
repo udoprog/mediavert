@@ -1,0 +1,21 @@
+[package]
+name = "audiovert"
+version = "0.0.4"
+authors = ["John-John Tedro <udoprog@tedro.se>"]
+edition = "2024"
+description = "A tool to perform batch conversion of music"
+documentation = "https://docs.rs/mediavert"
+readme = "README.md"
+homepage = "https://github.com/udoprog/mediavert"
+repository = "https://github.com/udoprog/mediavert"
+license = "MIT OR Apache-2.0"
+keywords = ["cbz", "cli", "music", "tui"]
+categories = ["command-line-utilities"]
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+termcolor.workspace = true
+ignore = "0.4.25"
+jiff = "0.2.16"
+lofty = "0.22.4"

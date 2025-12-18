@@ -1,0 +1,24 @@
+[package]
+name = "bookvert"
+version = "0.0.4"
+authors = ["John-John Tedro <udoprog@tedro.se>"]
+edition = "2024"
+description = "Conveniently convert a batch of directories into a book formats like .cbz"
+documentation = "https://docs.rs/mediavert"
+readme = "README.md"
+homepage = "https://github.com/udoprog/mediavert"
+repository = "https://github.com/udoprog/mediavert"
+license = "MIT OR Apache-2.0"
+keywords = ["cbz", "cli", "comic", "tui"]
+categories = ["command-line-utilities"]
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+ignore.workspace = true
+termcolor.workspace = true
+language-tags = "0.3.2"
+ratatui = { version = "0.29.0", default-features = false, features = ["crossterm"] }
+regex = "1.12.2"
+tui-input = "0.14.0"
+zip = "6.0.0"

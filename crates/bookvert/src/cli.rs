@@ -18,12 +18,11 @@ use termcolor::{ColorSpec, StandardStream, WriteColor};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipWriter};
 
-use bookvert::{App, Book, Catalog, Page, State};
+use crate::{App, Book, Catalog, Page, State};
 
-/// Helper tool to batch convert files into a .cbr
+/// A tool to perform batch conversion of books.
 #[derive(Parser)]
-#[command(about, version, max_term_width = 80)]
-struct Opts {
+pub struct Bookvert {
     /// Output directory to write to.
     #[arg(long, default_value = ".")]
     out: PathBuf,
@@ -348,7 +347,7 @@ fn translate(input: &str) -> &str {
     input
 }
 
-fn main() -> Result<()> {
+pub fn entry(opts: &Bookvert) -> Result<()> {
     let mut warn: ColorSpec = ColorSpec::new();
     warn.set_fg(Some(termcolor::Color::Yellow));
 
@@ -357,8 +356,6 @@ fn main() -> Result<()> {
 
     let mut error: ColorSpec = ColorSpec::new();
     error.set_fg(Some(termcolor::Color::Red));
-
-    let opts = Opts::try_parse()?;
 
     let mut skip = Vec::<Regex>::new();
     let mut picker = Picker::default();
@@ -579,7 +576,7 @@ fn main() -> Result<()> {
 
         writeln!(o, " {:03}: {}", c.number, book.dir.display())?;
 
-        let comic_info = config_info(&opts, &name, c, book).context("ComicInfo.xml generation")?;
+        let comic_info = config_info(opts, &name, c, book).context("ComicInfo.xml generation")?;
 
         if opts.verbose {
             o.set_color(&ok)?;
@@ -666,7 +663,7 @@ fn numbers(mut input: &str) -> impl Iterator<Item = u32> {
 }
 
 /// Generates ComicInfo.xml content if any metadata options are provided.
-fn config_info(opts: &Opts, name: &str, catalog: &Catalog, book: &Book) -> Result<String> {
+fn config_info(opts: &Bookvert, name: &str, catalog: &Catalog, book: &Book) -> Result<String> {
     let mut o = String::new();
 
     writeln!(o, "<?xml version=\"1.0\" encoding=\"utf-8\"?>")?;
