@@ -21,7 +21,7 @@ This combines several tools as subcommands:
 You can run the included example like this:
 
 ```sh
-mediavert audio --meta -D examples/unsorted --to examples/sorted
+cargo run --release -- audio --meta -D examples/unsorted --to examples/sorted
 ```
 
 [`bookvert`]: https://crates.io/crates/bookvert

@@ -15,6 +15,21 @@
 //! source file will not be moved unless `--trash-source` or `--remove-source`
 //! is specified.
 //!
+//! If any archives are encountered (zip, rar, 7z), they will be extracted
+//! in-memory and treated as-if they are files inside of a folder named the same
+//! as the archive.
+//!
+//! So if you have an archive like `music.zip` containing `song1.flac` and
+//! `song2.flac` it will be treated as if it was a directory like:
+//!
+//! ```text
+//! input/
+//!   # music.zip (archive)
+//!   music/
+//!     song1.flac
+//!     song2.flac
+//! ```
+//!
 //! <br>
 //!
 //! ## Usage
@@ -23,13 +38,13 @@
 //! `-D` to get an understanding of what it will try to do:
 //!
 //! ```sh
-//! toolkit music --dry-run --to music-lossy
+//! toolkit --dry-run unsorted --to sorted
 //! ```
 //!
 //! Once this looks good, you can run the command without `--dry-run`.
 //!
 //! ```sh
-//! toolkit music --to music-lossy
+//! toolkit --to sorted
 //! ```
 
 #![allow(clippy::drain_collect)]

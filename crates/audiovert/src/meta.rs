@@ -8,7 +8,7 @@ use lofty::file::{FileType, TaggedFile, TaggedFileExt};
 use lofty::probe::Probe;
 use lofty::tag::{ItemKey, ItemValue, TagItem};
 
-use crate::config::{Origin, Source};
+use crate::config::{Archives, Source};
 use crate::out::{Out, blank, info};
 
 pub(crate) struct Parts {
@@ -24,21 +24,21 @@ pub(crate) struct Parts {
 impl Parts {
     pub(crate) fn from_path(
         source: &Source,
+        archives: &Archives,
         errors: &mut Vec<String>,
         tag_items: Option<&mut Vec<TagItem>>,
     ) -> Result<Self> {
-        let file: TaggedFile = match &source.origin {
-            Origin::File => lofty::read_from_path(&source.path)?,
-            Origin::Archive(archive) => {
-                let contents = archive.contents()?;
-                let mut probe = Probe::new(Cursor::new(contents));
+        let file: TaggedFile = if source.origin.is_file() {
+            lofty::read_from_path(&source.path)?
+        } else {
+            let contents = archives.contents(source)?;
+            let mut probe = Probe::new(Cursor::new(contents));
 
-                if let Some(file_type) = source.ext().and_then(FileType::from_ext) {
-                    probe = probe.set_file_type(file_type);
-                }
-
-                probe.read()?
+            if let Some(file_type) = source.ext().and_then(FileType::from_ext) {
+                probe = probe.set_file_type(file_type);
             }
+
+            probe.read()?
         };
 
         let tag = file.primary_tag().context("missing primary tag")?;
@@ -292,11 +292,11 @@ pub(super) struct Dump {
 }
 
 impl Dump {
-    pub(crate) fn dump(&self, o: &mut Out<'_>) -> Result<()> {
+    pub(crate) fn dump(&self, o: &mut Out<'_>, archives: &Archives) -> Result<()> {
         info!(o, "Tags:");
         let mut o = o.indent(1);
 
-        self.source.dump(&mut o)?;
+        self.source.dump(&mut o, archives)?;
 
         for item in &self.items {
             dump_tag_item(&mut o, item)?;

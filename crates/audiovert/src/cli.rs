@@ -8,13 +8,13 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, ExitStatus, Stdio};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{self, Context, Result, bail};
 use clap::Parser;
 use termcolor::{ColorChoice, StandardStream};
 
 use crate::bitrates::Bitrates;
 use crate::condition::{Condition, FromCondition, ToCondition};
-use crate::config::{Config, Origin, Source};
+use crate::config::{Archives, Config, Origin, Source};
 use crate::format::Format;
 use crate::out::{Colors, Out, blank, error, info, warn};
 use crate::set_bit_rate::SetBitRate;
@@ -214,20 +214,20 @@ fn run(o: &mut Out<'_>, config: &Config) -> Result<()> {
     for Unsupported { source, ext } in tasks.unsupported.drain(..) {
         warn!(o, "Unsupported extension: {ext}");
         let mut o = o.indent(1);
-        source.dump(&mut o)?;
+        source.dump(&mut o, &tasks.archives)?;
     }
 
     for (from, to) in tasks.already_exists.drain(..) {
         warn!(o => v, "already exists (--force to remove):");
         let mut o = o.indent(1);
-        from.dump(&mut o)?;
+        from.dump(&mut o, &tasks.archives)?;
         blank!(o => v, "to: {}", shell::escape(to.as_os_str()));
     }
 
     for e in &tasks.errors {
         error!(o, "Error:");
         let mut o = o.indent(1);
-        e.source.dump(&mut o)?;
+        e.source.dump(&mut o, &tasks.archives)?;
 
         for m in &e.messages {
             error!(o, "{m}");
@@ -235,7 +235,7 @@ fn run(o: &mut Out<'_>, config: &Config) -> Result<()> {
     }
 
     for d in &tasks.meta_dumps {
-        d.dump(o)?;
+        d.dump(o, &tasks.archives)?;
     }
 
     if !tasks.errors.is_empty() && !config.keep_going {
@@ -256,7 +256,7 @@ fn run(o: &mut Out<'_>, config: &Config) -> Result<()> {
 
         info!(o => v, "Found matching conversions: {from} -> {to_formats}");
         let mut o = o.indent(1);
-        source.dump(&mut o)?;
+        source.dump(&mut o, &tasks.archives)?;
     }
 
     let total = tasks.tasks.len();
@@ -269,7 +269,7 @@ fn run(o: &mut Out<'_>, config: &Config) -> Result<()> {
         info!(o, "Task #{}/#{total}: {}", c.index, c.kind);
         let mut o = o.indent(1);
 
-        c.source.dump(&mut o)?;
+        c.source.dump(&mut o, &tasks.archives)?;
         blank!(o, "to: {}", shell::escape(c.to_path.as_os_str()));
 
         for (reason, path) in c.pre_remove.drain(..) {
@@ -334,7 +334,11 @@ fn run(o: &mut Out<'_>, config: &Config) -> Result<()> {
                             if pipe {
                                 command.stdin(Stdio::piped());
 
-                                let status = match write_source_to_stdin(&mut command, &c.source) {
+                                let status = match write_source_to_stdin(
+                                    &mut command,
+                                    &tasks.archives,
+                                    &c.source,
+                                ) {
                                     Ok(status) => status,
                                     Err(e) => {
                                         error!(o, "{e}");
@@ -391,23 +395,14 @@ fn run(o: &mut Out<'_>, config: &Config) -> Result<()> {
                     }
 
                     if config.verbose {
-                        c.source.dump(&mut o)?;
+                        c.source.dump(&mut o, &tasks.archives)?;
                         blank!(o, "to: {}", shell::escape(c.to_path.as_os_str()));
                     } else {
                         blank!(o, "{} <from> <to>", kind.symbolic_command());
                     }
 
                     if !config.dry_run {
-                        let result = match &c.source.origin {
-                            Origin::Archive(archive) => {
-                                let contents = archive.contents()?;
-                                fs::write(&c.to_path, contents)
-                            }
-                            Origin::File => match kind {
-                                TransferKind::Link => fs::hard_link(&c.source.path, &c.to_path),
-                                TransferKind::Move => fs::rename(&c.source.path, &c.to_path),
-                            },
-                        };
+                        let result = c.source.move_to(&tasks.archives, &c.to_path, kind);
 
                         if let Err(e) = result {
                             error!(o, "{e}");
@@ -530,9 +525,15 @@ fn is_empty_dir(path: &PathBuf) -> bool {
     entries.next().is_none()
 }
 
-fn write_source_to_stdin(command: &mut Command, source: &Source) -> Result<ExitStatus> {
+fn write_source_to_stdin(
+    command: &mut Command,
+    archives: &Archives,
+    source: &Source,
+) -> Result<ExitStatus> {
     let mut child = command.spawn().context("spawning process")?;
-    let contents = source.contents().context("reading source contents")?;
+    let contents = archives
+        .contents(source)
+        .context("reading source contents")?;
     let mut stdin = child.stdin.take().context("missing stdin")?;
     stdin.write_all(&contents).context("writing to stdin")?;
     stdin.flush().context("flushing stdin")?;

@@ -3,7 +3,7 @@ use core::fmt;
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-use crate::config::Source;
+use crate::config::{Archives, Source};
 use crate::format::Format;
 use crate::meta::Dump;
 
@@ -15,6 +15,7 @@ pub(crate) struct Tasks {
     pub(crate) to_trash: Vec<Trash>,
     pub(crate) already_exists: Vec<(Source, PathBuf)>,
     pub(crate) unsupported: Vec<Unsupported>,
+    pub(crate) archives: Archives,
 }
 
 impl Tasks {
@@ -27,12 +28,14 @@ impl Tasks {
             to_trash: Vec::new(),
             already_exists: Vec::new(),
             unsupported: Vec::new(),
+            archives: Archives::new(),
         }
     }
 }
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum TransferKind {
+    Copy,
     Link,
     Move,
 }
@@ -41,6 +44,7 @@ impl TransferKind {
     #[inline]
     pub(crate) fn symbolic_command(&self) -> &'static str {
         match self {
+            TransferKind::Copy => "cp",
             TransferKind::Link => "ln",
             TransferKind::Move => "mv",
         }
@@ -51,6 +55,7 @@ impl fmt::Display for TransferKind {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            TransferKind::Copy => write!(f, "copying"),
             TransferKind::Link => write!(f, "link"),
             TransferKind::Move => write!(f, "move"),
         }

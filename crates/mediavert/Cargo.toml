@@ -18,3 +18,4 @@ audiovert = { path = "../audiovert", version = "0.0.5" }
 
 anyhow.workspace = true
 clap.workspace = true
+zip = { version = "6.0.0" }

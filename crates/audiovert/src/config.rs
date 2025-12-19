@@ -1,10 +1,11 @@
 use core::fmt;
 
 use std::collections::{BTreeSet, HashSet};
-use std::fs;
+use std::fs::{self, File};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{Context, Result, anyhow, bail};
 
 use crate::archive::Archive;
 use crate::bitrates::Bitrates;
@@ -60,8 +61,15 @@ impl Config {
                     continue;
                 };
 
-                if let Some(archive) = Archive::from_ext(ext) {
-                    match archive {
+                if let Some(kind) = Archive::from_ext(ext) {
+                    let archive_id = tasks.archives.push(ArchiveOrigin {
+                        kind,
+                        path: walked.to_path_buf(),
+                    });
+
+                    let origin = Origin::Archive(archive_id);
+
+                    match kind {
                         Archive::Rar => {
                             let archive = unrar::Archive::new(walked);
                             let open_archive = archive.open_for_listing()?;
@@ -74,16 +82,29 @@ impl Config {
                                 }
 
                                 sources.push(Source {
-                                    origin: Origin::Archive(ArchiveOrigin {
-                                        kind: Archive::Rar,
-                                        archive_path: walked.to_path_buf(),
-                                        path: e.filename.clone(),
-                                    }),
+                                    origin,
                                     path: e.filename.clone(),
                                 });
                             }
                         }
-                        Archive::Zip => {}
+                        Archive::Zip => {
+                            let reader = File::open(walked)?;
+                            let mut archive = zip::ZipArchive::new(reader)?;
+
+                            for i in 0..archive.len() {
+                                let file = archive.by_index(i)?;
+
+                                let Some(path) = file.enclosed_name() else {
+                                    continue;
+                                };
+
+                                if path.is_absolute() {
+                                    continue;
+                                }
+
+                                sources.push(Source { origin, path });
+                            }
+                        }
                     }
                 } else {
                     let source = Source {
@@ -121,6 +142,7 @@ impl Config {
                     let id_parts = if self.meta {
                         let id_parts = meta::Parts::from_path(
                             &source,
+                            &tasks.archives,
                             &mut tag_errors,
                             (self.meta_dump || self.meta_dump_error).then_some(&mut tag_items),
                         );
@@ -170,18 +192,21 @@ impl Config {
                                     to_path
                                 }
                                 None => {
-                                    let Some(suffix) = source.path.strip_prefix(path).ok() else {
+                                    let mut to_path = to_dir.clone();
+
+                                    if let Err(e) =
+                                        source.to_path(path, &tasks.archives, &mut to_path)
+                                    {
                                         tasks.errors.push(PathError {
                                             source: source.clone(),
-                                            messages: vec![
-                                                "Failed to get suffix for path".to_string(),
-                                            ],
+                                            messages: vec![format!(
+                                                "failed to get source path: {e}"
+                                            )],
                                         });
 
                                         continue;
                                     };
 
-                                    let mut to_path = to_dir.join(suffix);
                                     to_path.set_extension(to.ext());
                                     to_path
                                 }
@@ -220,10 +245,14 @@ impl Config {
 
                         let kind = if from == to && !self.forced_bitrates.contains(&from) {
                             TaskKind::Transfer {
-                                kind: if self.r#move {
-                                    TransferKind::Move
+                                kind: if source.origin.is_file() {
+                                    if self.r#move {
+                                        TransferKind::Move
+                                    } else {
+                                        TransferKind::Link
+                                    }
                                 } else {
-                                    TransferKind::Link
+                                    TransferKind::Copy
                                 },
                             }
                         } else {
@@ -297,45 +326,63 @@ pub(crate) struct ArchiveOrigin {
     /// Kind of the archive.
     pub(crate) kind: Archive,
     /// Path to the archive.
-    pub(crate) archive_path: PathBuf,
-    /// Path inside the archive.
     pub(crate) path: PathBuf,
 }
 
 impl ArchiveOrigin {
-    pub(crate) fn contents(&self) -> Result<Vec<u8>> {
+    /// Get the contents of a file inside the archive.
+    pub(crate) fn contents(&self, path: &Path) -> Result<Vec<u8>> {
         match self.kind {
             Archive::Rar => {
-                let archive = unrar::Archive::new(&self.archive_path);
+                let archive = unrar::Archive::new(&self.path);
                 let mut archive = archive.open_for_processing()?;
 
                 while let Some(a) = archive.read_header()? {
-                    if a.entry().filename == self.path {
+                    if a.entry().filename == path {
                         let (contents, _) = a.read()?;
                         return Ok(contents);
                     }
 
                     archive = a.skip()?;
                 }
-
-                Err(anyhow::anyhow!(
-                    "file {:?} not found in archive {:?}",
-                    self.path,
-                    self.archive_path
-                ))
             }
-            Archive::Zip => Err(anyhow::anyhow!("zip archives not supported yet")),
+            Archive::Zip => {
+                let reader = File::open(&self.path)?;
+                let mut archive = zip::ZipArchive::new(reader)?;
+
+                for i in 0..archive.len() {
+                    let mut file = archive.by_index(i)?;
+
+                    let Some(file_path) = file.enclosed_name() else {
+                        continue;
+                    };
+
+                    if file_path != path {
+                        continue;
+                    }
+
+                    let mut contents = Vec::with_capacity(file.size() as usize);
+                    file.read_to_end(&mut contents)?;
+                    return Ok(contents);
+                }
+            }
         }
+
+        Err(anyhow!(
+            "file {} not found in archive {:?}",
+            path.display(),
+            self.path
+        ))
     }
 }
 
 /// Origin of a source file.
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub(crate) enum Origin {
     /// A regular file in the filesystem.
     File,
     /// A file inside an archive.
-    Archive(ArchiveOrigin),
+    Archive(ArchiveId),
 }
 
 impl Origin {
@@ -343,6 +390,60 @@ impl Origin {
     #[inline]
     pub(crate) fn is_file(&self) -> bool {
         matches!(self, Origin::File)
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct ArchiveId(usize);
+
+impl fmt::Display for ArchiveId {
+    #[inline]
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+/// Collection of archives.
+pub(crate) struct Archives {
+    archives: Vec<ArchiveOrigin>,
+}
+
+impl Archives {
+    /// Construct a new collection of archives.
+    pub(crate) fn new() -> Self {
+        Archives {
+            archives: Vec::new(),
+        }
+    }
+
+    pub(crate) fn get(&self, id: ArchiveId) -> Result<&ArchiveOrigin> {
+        let Some(archive) = self.archives.get(id.0) else {
+            return Err(anyhow!("invalid archive id: {id}"));
+        };
+
+        Ok(archive)
+    }
+
+    /// Push an archive to the collection.
+    #[inline]
+    pub(crate) fn push(&mut self, archive: ArchiveOrigin) -> ArchiveId {
+        let id = ArchiveId(self.archives.len());
+        self.archives.push(archive);
+        id
+    }
+
+    /// Get the contents of the source file.
+    pub(crate) fn contents(&self, source: &Source) -> Result<Vec<u8>> {
+        match source.origin {
+            Origin::File => Ok(fs::read(&source.path)?),
+            Origin::Archive(archive) => {
+                let Some(archive) = self.archives.get(archive.0) else {
+                    anyhow::bail!("invalid archive id: {archive}");
+                };
+
+                archive.contents(&source.path)
+            }
+        }
     }
 }
 
@@ -354,12 +455,66 @@ pub(crate) struct Source {
 }
 
 impl Source {
-    /// Get the contents of the source file.
-    pub(crate) fn contents(&self) -> Result<Vec<u8>> {
+    pub(crate) fn to_path(
+        &self,
+        path: &Path,
+        archives: &Archives,
+        out: &mut PathBuf,
+    ) -> Result<()> {
         match &self.origin {
-            Origin::File => Ok(fs::read(&self.path)?),
-            Origin::Archive(archive) => archive.contents(),
+            Origin::Archive(archive) => {
+                let archive = archives.get(*archive)?;
+
+                let Some(suffix) = archive.path.strip_prefix(path).ok() else {
+                    bail!("failed to get suffix for path");
+                };
+
+                if let Some(parent) = suffix.parent() {
+                    out.push(parent);
+                }
+
+                if let Some(file_name) = archive.path.file_stem() {
+                    out.push(file_name);
+                }
+
+                out.push(&self.path);
+                Ok(())
+            }
+            Origin::File => {
+                let Some(suffix) = self.path.strip_prefix(path).ok() else {
+                    bail!("failed to get suffix for path");
+                };
+
+                out.push(suffix);
+                Ok(())
+            }
         }
+    }
+
+    pub(crate) fn move_to(&self, archives: &Archives, to: &Path, kind: TransferKind) -> Result<()> {
+        match &self.origin {
+            Origin::Archive(..) => match kind {
+                TransferKind::Link => bail!("cannot link from archive"),
+                TransferKind::Move => bail!("cannot move from archive"),
+                TransferKind::Copy => {
+                    let contents = archives.contents(self)?;
+                    fs::write(to, contents).context("writing file")?;
+                }
+            },
+            Origin::File => match kind {
+                TransferKind::Link => {
+                    fs::hard_link(&self.path, to).context("creating hard link")?;
+                }
+                TransferKind::Move => {
+                    fs::rename(&self.path, to).context("moving file")?;
+                }
+                TransferKind::Copy => {
+                    fs::copy(&self.path, to).context("copying file")?;
+                }
+            },
+        }
+
+        Ok(())
     }
 
     /// Get the extension of the source file.
@@ -368,22 +523,19 @@ impl Source {
     }
 
     /// Dump source information.
-    pub(crate) fn dump(&self, o: &mut Out<'_>) -> Result<()> {
-        match &self.origin {
-            Origin::File => {
-                blank!(o, "path: {}", shell::escape(self.path.as_os_str()));
-            }
-            Origin::Archive(archive) => {
-                blank!(
-                    o,
-                    "{}: {}",
-                    archive.kind,
-                    shell::escape(archive.archive_path.as_os_str())
-                );
-                blank!(o, "path: {}", shell::escape(archive.path.as_os_str()));
-            }
+    pub(crate) fn dump(&self, o: &mut Out<'_>, archives: &Archives) -> Result<()> {
+        if let Origin::Archive(archive) = self.origin {
+            let archive = archives.get(archive)?;
+
+            blank!(
+                o,
+                "{}: {}",
+                archive.kind,
+                shell::escape(archive.path.as_os_str()),
+            );
         }
 
+        blank!(o, "path: {}", shell::escape(self.path.as_os_str()));
         Ok(())
     }
 }
