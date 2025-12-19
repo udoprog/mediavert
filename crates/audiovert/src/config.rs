@@ -227,9 +227,6 @@ impl Config {
                             }
                         };
 
-                        // TODO: Fill this out.
-                        let to_absolute_path = None;
-
                         if source.as_file().is_some_and(|p| p == to_path) {
                             continue;
                         }
@@ -285,7 +282,6 @@ impl Config {
                             kind,
                             source: source.clone(),
                             to_path,
-                            to_absolute_path,
                             moved: exists,
                             pre_remove,
                         });

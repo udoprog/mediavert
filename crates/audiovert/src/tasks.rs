@@ -110,7 +110,6 @@ pub(crate) struct Task {
     pub(crate) kind: TaskKind,
     pub(crate) source: Source,
     pub(crate) to_path: PathBuf,
-    pub(crate) to_absolute_path: Option<PathBuf>,
     pub(crate) moved: bool,
     pub(crate) pre_remove: Vec<(&'static str, PathBuf)>,
 }

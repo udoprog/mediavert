@@ -285,11 +285,7 @@ fn run(o: &mut Out<'_>, config: &Config) -> Result<()> {
         let mut o = o.indent(1);
 
         c.source.dump(&mut o, &tasks.archives)?;
-        o.blank_link(
-            "to:",
-            shell::path(&c.to_path),
-            c.to_absolute_path.as_deref(),
-        )?;
+        blank!(o, "to: {}", shell::path(&c.to_path));
 
         for (reason, path) in c.pre_remove.drain(..) {
             info!(o, "removing {reason}");
