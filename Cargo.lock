@@ -101,7 +101,7 @@ dependencies = [
 
 [[package]]
 name = "audiovert"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "anyhow",
  "clap",
@@ -141,7 +141,7 @@ dependencies = [
 
 [[package]]
 name = "bookvert"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "anyhow",
  "clap",
@@ -848,7 +848,7 @@ checksum = "48172246aa7c3ea28e423295dd1ca2589a24617cc4e588bb8cfe177cb2c54d95"
 
 [[package]]
 name = "mediavert"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "anyhow",
  "audiovert",

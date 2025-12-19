@@ -1,6 +1,6 @@
 [package]
 name = "bookvert"
-version = "0.0.6"
+version = "0.0.7"
 authors = ["John-John Tedro <udoprog@tedro.se>"]
 edition = "2024"
 description = "Conveniently convert a batch of directories into a book formats like .cbz"
