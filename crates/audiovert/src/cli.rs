@@ -1,31 +1,26 @@
 use core::cell::Cell;
 use core::fmt;
-use core::str::FromStr;
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashSet};
 use std::env;
 use std::ffi::{OsStr, OsString};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 use clap::Parser;
 use termcolor::{ColorChoice, StandardStream};
 
+use crate::archive::Archive;
+use crate::bitrates::Bitrates;
+use crate::condition::{Condition, FromCondition, ToCondition};
+use crate::config::Config;
+use crate::format::Format;
 use crate::meta;
 use crate::out::{Colors, Out, blank, error, info, warn};
+use crate::set_bit_rate::SetBitRate;
 use crate::shell::{self, FormatCommand};
-
-const DEFAULT_BITRATE_AAC: u32 = 192;
-const DEFAULT_BITRATE_MP3: u32 = 320;
-const DEFAULT_BITRATE_OGG: u32 = 192;
-
-const DEFAULT_BITRATES: [(Format, u32); 3] = [
-    (Format::Aac, DEFAULT_BITRATE_AAC),
-    (Format::Mp3, DEFAULT_BITRATE_MP3),
-    (Format::Ogg, DEFAULT_BITRATE_OGG),
-];
 
 const PART: &str = "part";
 
@@ -115,62 +110,16 @@ pub struct Audiovert {
     paths: Vec<PathBuf>,
 }
 
-/// Configuration for conversions.
-struct Config {
-    bitrates: Bitrates,
-    conversion: Vec<Condition>,
-    dry_run: bool,
-    ffmpeg: PathBuf,
-    force: bool,
-    keep_going: bool,
-    meta_dump_error: bool,
-    meta_dump: bool,
-    meta: bool,
-    part_ext: String,
-    paths: Vec<PathBuf>,
-    r#move: bool,
-    forced_bitrates: HashSet<Format>,
-    to_dir: Option<PathBuf>,
-    trash_source: bool,
-    trash: PathBuf,
-    verbose: bool,
-}
-
-impl Config {
-    fn make_dir(&self, o: &mut Out<'_>, what: impl fmt::Display, path: &Path) -> Result<bool> {
-        let Some(parent) = path.parent() else {
-            return Ok(true);
-        };
-
-        if parent.is_dir() {
-            return Ok(true);
-        }
-
-        info!(o, "making {what} dir");
-        let mut o = o.indent(1);
-        blank!(o, "mkdir -p {}", shell::escape(parent.as_os_str()));
-
-        if self.dry_run {
-            return Ok(true);
-        }
-
-        if let Err(e) = fs::create_dir_all(parent) {
-            error!(o, "{e}");
-            Ok(false)
-        } else {
-            Ok(true)
-        }
-    }
-}
-
 /// Entry for `audiovert`.
 ///
 /// See [`crate`] documentation.
 pub fn entry(opts: &Audiovert) -> Result<()> {
     // Current indentation level for output.
     let indent = Cell::new(0);
+
     // Collection of bitrates.
     let mut bitrates = Bitrates::default();
+
     // Formats to re-encode.
     let mut forced_bitrates = HashSet::new();
 
@@ -282,6 +231,10 @@ fn run(o: &mut Out<'_>, config: &Config) -> Result<()> {
             };
 
             let Some(from) = Format::from_ext(ext) else {
+                if let Some(_archive) = Archive::from_ext(ext) {
+                    continue;
+                };
+
                 warn!(o, "Unsupported extension: {ext}");
                 let mut o = o.indent(1);
                 blank!(o, "Path: {}", shell::escape(from_path.as_os_str()));
@@ -308,7 +261,7 @@ fn run(o: &mut Out<'_>, config: &Config) -> Result<()> {
                 let has_errors = !tag_errors.is_empty();
 
                 if !tag_errors.is_empty() {
-                    errors.push(Error {
+                    errors.push(PathError {
                         path: from_path.to_path_buf(),
                         messages: tag_errors.drain(..).collect(),
                     });
@@ -343,7 +296,7 @@ fn run(o: &mut Out<'_>, config: &Config) -> Result<()> {
                         }
                         None => {
                             let Some(suffix) = from_path.strip_prefix(path).ok() else {
-                                errors.push(Error {
+                                errors.push(PathError {
                                     path: from_path.to_path_buf(),
                                     messages: vec!["Failed to get suffix for path".to_string()],
                                 });
@@ -694,254 +647,6 @@ fn is_empty_dir(path: &PathBuf) -> bool {
     entries.next().is_none()
 }
 
-#[derive(Clone, Copy)]
-struct SetBitRate {
-    from: FromCondition,
-    bitrate: u32,
-}
-
-impl FromStr for SetBitRate {
-    type Err = &'static str;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let (format, bitrate) = s.split_once('=').ok_or("missing '=' separator")?;
-        let format = FromCondition::from_str(format)?;
-        let bitrate = bitrate.parse::<u32>().map_err(|_| "invalid bitrate")?;
-        Ok(SetBitRate {
-            from: format,
-            bitrate,
-        })
-    }
-}
-
-impl fmt::Display for SetBitRate {
-    #[inline]
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}={}", self.from, self.bitrate)
-    }
-}
-
-struct Bitrates {
-    map: HashMap<Format, u32>,
-}
-
-impl Default for Bitrates {
-    #[inline]
-    fn default() -> Self {
-        Self {
-            map: HashMap::from(DEFAULT_BITRATES),
-        }
-    }
-}
-
-#[derive(Copy, Clone, Debug)]
-enum FromCondition {
-    Lossless,
-    Lossy,
-    Exact(Format),
-}
-
-impl FromCondition {
-    fn pick_bitrates<'bits>(
-        &self,
-        bitrates: &'bits mut Bitrates,
-    ) -> impl Iterator<Item = (Format, &'bits mut u32)> + 'bits {
-        let this = *self;
-        bitrates
-            .map
-            .iter_mut()
-            .filter(move |(format, _)| this.matches(**format))
-            .map(|(f, v)| (*f, v))
-    }
-
-    fn matches(self, format: Format) -> bool {
-        match self {
-            FromCondition::Lossless => format.is_lossless(),
-            FromCondition::Lossy => !format.is_lossless(),
-            FromCondition::Exact(f) => f == format,
-        }
-    }
-}
-
-impl FromStr for FromCondition {
-    type Err = &'static str;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "lossless" => Ok(Self::Lossless),
-            "lossy" => Ok(Self::Lossy),
-            _ => Ok(Self::Exact(Format::from_str(s)?)),
-        }
-    }
-}
-
-impl fmt::Display for FromCondition {
-    #[inline]
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            FromCondition::Lossless => write!(f, "lossless"),
-            FromCondition::Lossy => write!(f, "lossy"),
-            FromCondition::Exact(format) => format.fmt(f),
-        }
-    }
-}
-
-#[derive(Copy, Clone, Debug)]
-enum ToCondition {
-    Exact(Format),
-    Same,
-}
-
-impl ToCondition {
-    fn to_format(self, format: Format) -> Format {
-        match self {
-            ToCondition::Exact(f) => f,
-            ToCondition::Same => format,
-        }
-    }
-}
-
-impl FromStr for ToCondition {
-    type Err = &'static str;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s == "same" {
-            Ok(ToCondition::Same)
-        } else {
-            let format = Format::from_str(s)?;
-            Ok(ToCondition::Exact(format))
-        }
-    }
-}
-
-#[derive(Copy, Clone, Debug)]
-enum Condition {
-    FromTo {
-        from: FromCondition,
-        to: ToCondition,
-    },
-    To {
-        to: ToCondition,
-    },
-    Same,
-}
-
-impl Condition {
-    fn to_format(self, format: Format) -> Option<Format> {
-        match self {
-            Condition::Same => Some(format),
-            Condition::To { to } => Some(to.to_format(format)),
-            Condition::FromTo { from, to } => {
-                if from.matches(format) {
-                    Some(to.to_format(format))
-                } else {
-                    None
-                }
-            }
-        }
-    }
-}
-
-impl FromStr for Condition {
-    type Err = &'static str;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "same" => Ok(Condition::Same),
-            _ => {
-                let Some((from_str, to_str)) = s.split_once('=') else {
-                    let to = ToCondition::from_str(s)?;
-                    return Ok(Condition::To { to });
-                };
-
-                let from = FromCondition::from_str(from_str)?;
-                let to = ToCondition::from_str(to_str)?;
-                Ok(Condition::FromTo { from, to })
-            }
-        }
-    }
-}
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-enum Format {
-    Aac,
-    Flac,
-    Mp3,
-    Ogg,
-    Wav,
-}
-
-impl Format {
-    fn default_bitrate(&self) -> Option<u32> {
-        match self {
-            Format::Aac => Some(DEFAULT_BITRATE_AAC),
-            Format::Mp3 => Some(DEFAULT_BITRATE_MP3),
-            Format::Ogg => Some(DEFAULT_BITRATE_OGG),
-            _ => None,
-        }
-    }
-
-    fn is_lossless(&self) -> bool {
-        matches!(self, Format::Flac | Format::Wav)
-    }
-
-    fn bitrate(&self, config: &Config, command: &mut Command) {
-        if let Some(bitrate) = config.bitrates.map.get(self)
-            && *bitrate > 0
-        {
-            command.arg("-ab");
-            command.arg(format!("{}k", bitrate));
-        }
-    }
-
-    fn ext(&self) -> &'static str {
-        match self {
-            Format::Aac => "aac",
-            Format::Flac => "flac",
-            Format::Mp3 => "mp3",
-            Format::Ogg => "ogg",
-            Format::Wav => "wav",
-        }
-    }
-
-    fn ffmpeg_format(&self) -> &'static str {
-        match self {
-            Format::Aac => "adts",
-            Format::Flac => "flac",
-            Format::Mp3 => "mp3",
-            Format::Ogg => "ogg",
-            Format::Wav => "wav",
-        }
-    }
-
-    fn from_ext(ext: &str) -> Option<Format> {
-        match ext {
-            "aac" => Some(Format::Aac),
-            "flac" => Some(Format::Flac),
-            "mp3" => Some(Format::Mp3),
-            "ogg" => Some(Format::Ogg),
-            "wav" => Some(Format::Wav),
-            _ => None,
-        }
-    }
-}
-
-impl fmt::Display for Format {
-    #[inline]
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.ext().fmt(f)
-    }
-}
-
-impl FromStr for Format {
-    type Err = &'static str;
-
-    #[inline]
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Self::from_ext(s).ok_or("unsupported format")
-    }
-}
-
 #[derive(Debug, Clone, Copy)]
 enum TransferKind {
     Link,
@@ -980,6 +685,7 @@ enum TaskKind {
 }
 
 impl TaskKind {
+    #[inline]
     fn is_completed(&self) -> bool {
         match self {
             TaskKind::Convert { converted, .. } => *converted,
@@ -998,7 +704,7 @@ impl fmt::Display for TaskKind {
     }
 }
 
-struct Error {
+struct PathError {
     path: PathBuf,
     messages: Vec<String>,
 }

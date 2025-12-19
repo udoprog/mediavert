@@ -34,7 +34,13 @@
 
 #![allow(clippy::drain_collect)]
 
+mod archive;
+mod bitrates;
 pub mod cli;
+mod condition;
+mod config;
+mod format;
 mod meta;
 mod out;
+mod set_bit_rate;
 mod shell;
