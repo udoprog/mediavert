@@ -108,6 +108,8 @@ dependencies = [
  "ignore",
  "jiff",
  "lofty",
+ "relative-path",
+ "sevenz-rust2",
  "termcolor",
  "unrar",
  "zip",
@@ -124,6 +126,15 @@ name = "block-buffer"
 version = "0.10.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3078c7629b62d3f0439517fa394996acacc5cbc91c5a20d8c658e77abd503a71"
+dependencies = [
+ "generic-array",
+]
+
+[[package]]
+name = "block-padding"
+version = "0.3.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a8894febbff9f758034a5b8e12d87918f56dfc64a8e1fe757d65e29041538d93"
 dependencies = [
  "generic-array",
 ]
@@ -187,6 +198,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dec551ab6e7578819132c713a93c022a05d60159dc86e7a7050223577484c55a"
 dependencies = [
  "rustversion",
+]
+
+[[package]]
+name = "cbc"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "26b52a9543ae338f279b96b0b9fed9c8093744685043739079ce85cd58f289a6"
+dependencies = [
+ "cipher",
 ]
 
 [[package]]
@@ -622,6 +642,7 @@ version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "879f10e63c20629ecabbb64a8010319738c66a5cd0c29b02d63d272b03751d01"
 dependencies = [
+ "block-padding",
  "generic-array",
 ]
 
@@ -708,6 +729,16 @@ checksum = "9afb3de4395d6b3e67a780b6de64b51c978ecf11cb9a462c66be7d4ca9039d33"
 dependencies = [
  "getrandom",
  "libc",
+]
+
+[[package]]
+name = "js-sys"
+version = "0.3.83"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "464a3709c7f55f1f721e5389aa6ea4e3bc6aba669353300af094b29ffbdde1d8"
+dependencies = [
+ "once_cell",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -810,6 +841,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "lzma-rust2"
+version = "0.15.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "48172246aa7c3ea28e423295dd1ca2589a24617cc4e588bb8cfe177cb2c54d95"
+
+[[package]]
 name = "mediavert"
 version = "0.0.5"
 dependencies = [
@@ -817,7 +854,6 @@ dependencies = [
  "audiovert",
  "bookvert",
  "clap",
- "zip",
 ]
 
 [[package]]
@@ -862,6 +898,12 @@ checksum = "e034c10fb5c1c012c1b327b85df89fb0ef98ae66ec28af30f0d1eed804a40c19"
 dependencies = [
  "byteorder",
 ]
+
+[[package]]
+name = "once_cell"
+version = "1.21.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "42f5e15c9953c5e4ccceeb2e7382a716482c34515315f7b03532b8b4e8393d2d"
 
 [[package]]
 name = "once_cell_polyfill"
@@ -1025,6 +1067,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7a2d987857b319362043e95f5353c0535c1f58eec5336fdfcf626430af7def58"
 
 [[package]]
+name = "relative-path"
+version = "2.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bca40a312222d8ba74837cb474edef44b37f561da5f773981007a10bbaa992b0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "rustix"
 version = "0.38.44"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1104,6 +1155,24 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "sevenz-rust2"
+version = "0.20.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "611081ec4fc67633b979fc0c24385de90fa60acd18126d796c8758a24294a950"
+dependencies = [
+ "aes",
+ "bzip2",
+ "cbc",
+ "crc32fast",
+ "getrandom",
+ "js-sys",
+ "lzma-rust2 0.15.4",
+ "ppmd-rust",
+ "sha2",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -1383,6 +1452,51 @@ dependencies = [
 ]
 
 [[package]]
+name = "wasm-bindgen"
+version = "0.2.106"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0d759f433fa64a2d763d1340820e46e111a7a5ab75f993d1852d70b03dbb80fd"
+dependencies = [
+ "cfg-if",
+ "once_cell",
+ "rustversion",
+ "wasm-bindgen-macro",
+ "wasm-bindgen-shared",
+]
+
+[[package]]
+name = "wasm-bindgen-macro"
+version = "0.2.106"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "48cb0d2638f8baedbc542ed444afc0644a29166f1595371af4fecf8ce1e7eeb3"
+dependencies = [
+ "quote",
+ "wasm-bindgen-macro-support",
+]
+
+[[package]]
+name = "wasm-bindgen-macro-support"
+version = "0.2.106"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cefb59d5cd5f92d9dcf80e4683949f15ca4b511f4ac0a6e14d4e1ac60c6ecd40"
+dependencies = [
+ "bumpalo",
+ "proc-macro2",
+ "quote",
+ "syn",
+ "wasm-bindgen-shared",
+]
+
+[[package]]
+name = "wasm-bindgen-shared"
+version = "0.2.106"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cbc538057e648b67f72a982e708d485b2efa771e1ac05fec311f9f63e5800db4"
+dependencies = [
+ "unicode-ident",
+]
+
+[[package]]
 name = "widestring"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1623,7 +1737,7 @@ dependencies = [
  "getrandom",
  "hmac",
  "indexmap",
- "lzma-rust2",
+ "lzma-rust2 0.13.0",
  "memchr",
  "pbkdf2",
  "ppmd-rust",

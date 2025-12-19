@@ -7,12 +7,6 @@ use termcolor::ColorSpec;
 use termcolor::WriteColor;
 
 macro_rules! __log {
-    ($log:ident, $o:ident => v $(, $($tt:tt)*)?) => {
-        if $o.is_verbose() {
-            $( $o.$log(format_args!($($tt)*))?; )*
-        }
-    };
-
     ($log:ident, $o:ident $(, $($tt:tt)*)?) => {
         $( $o.$log(format_args!($($tt)*))?; )*
     };
@@ -53,7 +47,6 @@ impl Colors {
 
 pub(crate) struct Out<'a> {
     change: isize,
-    verbose: bool,
     indent: &'a Cell<usize>,
     c: &'a Colors,
     o: &'a mut dyn WriteColor,
@@ -61,23 +54,16 @@ pub(crate) struct Out<'a> {
 
 impl Out<'_> {
     pub(crate) fn new<'a>(
-        verbose: bool,
         indent: &'a Cell<usize>,
         c: &'a Colors,
         o: &'a mut dyn WriteColor,
     ) -> Out<'a> {
         Out {
             change: 0,
-            verbose,
             indent,
             c,
             o,
         }
-    }
-
-    #[inline]
-    pub(crate) fn is_verbose(&self) -> bool {
-        self.verbose
     }
 }
 
@@ -88,7 +74,6 @@ impl<'a> Out<'a> {
 
         Out {
             change,
-            verbose: self.verbose,
             indent: self.indent,
             c: self.c,
             o: self.o,

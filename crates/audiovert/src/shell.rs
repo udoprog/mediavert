@@ -10,6 +10,10 @@ pub(crate) fn escape(s: &OsStr) -> Cow<'_, str> {
         return Cow::Borrowed("<non-utf8>");
     };
 
+    escape_str(s)
+}
+
+pub(crate) fn escape_str(s: &str) -> Cow<'_, str> {
     let mut o = String::new();
 
     let s = 'escape: {

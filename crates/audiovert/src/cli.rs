@@ -202,7 +202,7 @@ pub fn entry(opts: &Audiovert) -> Result<()> {
 
     let o = StandardStream::stdout(ColorChoice::Auto);
     let mut o = o.lock();
-    let mut o = Out::new(config.verbose, &indent, &cols, &mut o);
+    let mut o = Out::new(&indent, &cols, &mut o);
     run(&mut o, &config)
 }
 
@@ -217,11 +217,13 @@ fn run(o: &mut Out<'_>, config: &Config) -> Result<()> {
         source.dump(&mut o, &tasks.archives)?;
     }
 
-    for (from, to) in tasks.already_exists.drain(..) {
-        warn!(o => v, "already exists (--force to remove):");
-        let mut o = o.indent(1);
-        from.dump(&mut o, &tasks.archives)?;
-        blank!(o => v, "to: {}", shell::escape(to.as_os_str()));
+    if config.verbose {
+        for (from, to) in tasks.already_exists.drain(..) {
+            warn!(o, "already exists (--force to remove):");
+            let mut o = o.indent(1);
+            from.dump(&mut o, &tasks.archives)?;
+            blank!(o, "to: {}", shell::escape(to.as_os_str()));
+        }
     }
 
     for e in &tasks.errors {
@@ -242,21 +244,23 @@ fn run(o: &mut Out<'_>, config: &Config) -> Result<()> {
         bail!("Aborting due to previous errors, use --keep-going to ignore.");
     }
 
-    for MatchingConversion {
-        source,
-        from,
-        to_formats,
-    } in tasks.matching_conversions.drain(..)
-    {
-        let to_formats = to_formats
-            .iter()
-            .map(|f| f.to_string())
-            .collect::<Vec<_>>()
-            .join(", ");
+    if config.verbose {
+        for MatchingConversion {
+            source,
+            from,
+            to_formats,
+        } in tasks.matching_conversions.drain(..)
+        {
+            let to_formats = to_formats
+                .iter()
+                .map(|f| f.to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
 
-        info!(o => v, "Found matching conversions: {from} -> {to_formats}");
-        let mut o = o.indent(1);
-        source.dump(&mut o, &tasks.archives)?;
+            info!(o, "Found matching conversions: {from} -> {to_formats}");
+            let mut o = o.indent(1);
+            source.dump(&mut o, &tasks.archives)?;
+        }
     }
 
     let total = tasks.tasks.len();
@@ -299,7 +303,7 @@ fn run(o: &mut Out<'_>, config: &Config) -> Result<()> {
                 if !*converted {
                     let (argument, pipe) = match &c.source.origin {
                         Origin::File => (c.source.path.as_os_str(), false),
-                        Origin::Archive(_) => (OsStr::new("pipe:"), true),
+                        Origin::Archive { .. } => (OsStr::new("pipe:"), true),
                     };
 
                     let mut command = Command::new(&config.ffmpeg);
@@ -462,7 +466,7 @@ fn run(o: &mut Out<'_>, config: &Config) -> Result<()> {
 
         let mut o = o.indent(1);
 
-        blank!(o => v, "path: {}", shell::escape(config.trash.as_os_str()));
+        blank!(o, "path: {}", shell::escape(config.trash.as_os_str()));
 
         if !config.dry_run
             && let Err(e) = fs::create_dir_all(&config.trash)
