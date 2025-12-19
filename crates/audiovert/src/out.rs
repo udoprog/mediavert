@@ -89,7 +89,7 @@ impl<'a> Out<'a> {
         Ok(())
     }
 
-    pub(crate) fn blank_link(
+    pub(crate) fn link(
         &mut self,
         header: impl fmt::Display,
         value: impl fmt::Display,
@@ -99,8 +99,9 @@ impl<'a> Out<'a> {
         write!(self.o, "{header}: ")?;
 
         if let Some(to) = to {
-            let link = format!("file://{}", to.display());
-            let open = HyperlinkSpec::open(link.as_bytes());
+            let mut link = Vec::from(b"file://");
+            link.extend_from_slice(to.as_os_str().as_encoded_bytes());
+            let open = HyperlinkSpec::open(&link);
             self.o.set_hyperlink(&open)?;
         }
 

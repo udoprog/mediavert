@@ -46,6 +46,7 @@ impl Config {
         let mut tag_items = Vec::new();
         let mut to_formats = BTreeSet::new();
         let mut sources = Vec::new();
+        let mut pre_remove = Vec::new();
 
         for walk_path in &self.paths {
             let dir = if walk_path.is_file() {
@@ -190,7 +191,7 @@ impl Config {
                     };
 
                     for &to in &to_formats {
-                        let mut pre_remove = Vec::new();
+                        debug_assert!(pre_remove.is_empty());
 
                         let to_path = if let Some(to_dir) = &self.to_dir {
                             match &id_parts {
@@ -227,20 +228,28 @@ impl Config {
                             continue;
                         }
 
-                        let exists = if to_path.exists() {
+                        let exists;
+                        let to_path_absolute;
+
+                        if to_path.exists() {
                             if !self.force {
                                 tasks.already_exists.push(Exists {
                                     source: source.clone(),
                                     path: to_path.clone(),
                                     absolute_path: fs::canonicalize(&to_path)?,
                                 });
-                                true
+
+                                exists = true;
                             } else {
                                 pre_remove.push(("destination path (--force)", to_path.clone()));
-                                false
+
+                                exists = false;
                             }
+
+                            to_path_absolute = Some(fs::canonicalize(&to_path)?);
                         } else {
-                            false
+                            exists = false;
+                            to_path_absolute = None;
                         };
 
                         let kind = if from == to && !self.forced_bitrates.contains(&from) {
@@ -278,8 +287,9 @@ impl Config {
                             kind,
                             source: source.clone(),
                             to_path,
+                            to_path_absolute,
                             moved: exists,
-                            pre_remove,
+                            pre_remove: pre_remove.drain(..).collect(),
                         });
                     }
                 }
@@ -537,16 +547,17 @@ impl Source {
                 path,
                 absolute_path,
             } => {
-                o.blank_link("file", shell::path(path), Some(absolute_path))?;
+                o.link("from", shell::path(path), Some(absolute_path))?;
             }
             Self::Archive { archive, path } => {
                 let archive = archives.get(*archive)?;
-                o.blank_link(
+                o.link(
                     archive.kind,
                     shell::path(&archive.path),
                     Some(&archive.absolute_path),
                 )?;
-                blank!(o, "file: {path}");
+                let mut o = o.indent(1);
+                blank!(o, "name: {path}");
             }
         }
 

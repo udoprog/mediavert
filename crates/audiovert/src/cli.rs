@@ -228,7 +228,7 @@ fn run(o: &mut Out<'_>, config: &Config) -> Result<()> {
             warn!(o, "already exists (--force to remove):");
             let mut o = o.indent(1);
             source.dump(&mut o, &tasks.archives)?;
-            o.blank_link("to", shell::path(&path), Some(&absolute_path))?;
+            o.link("to", shell::path(&path), Some(&absolute_path))?;
         }
     }
 
@@ -285,7 +285,7 @@ fn run(o: &mut Out<'_>, config: &Config) -> Result<()> {
         let mut o = o.indent(1);
 
         c.source.dump(&mut o, &tasks.archives)?;
-        blank!(o, "to: {}", shell::path(&c.to_path));
+        o.link("to", shell::path(&c.to_path), c.to_path_absolute.as_deref())?;
 
         for (reason, path) in c.pre_remove.drain(..) {
             info!(o, "removing {reason}");
@@ -391,7 +391,7 @@ fn run(o: &mut Out<'_>, config: &Config) -> Result<()> {
 
                         if config.verbose {
                             blank!(o, "from: {}", shell::path(part_path));
-                            blank!(o, "to: {}", shell::path(&c.to_path));
+                            o.link("to", shell::path(&c.to_path), c.to_path_absolute.as_deref())?;
                         }
 
                         if !config.dry_run {
@@ -414,7 +414,7 @@ fn run(o: &mut Out<'_>, config: &Config) -> Result<()> {
 
                     if config.verbose {
                         c.source.dump(&mut o, &tasks.archives)?;
-                        blank!(o, "to: {}", shell::path(&c.to_path));
+                        o.link("to", shell::path(&c.to_path), c.to_path_absolute.as_deref())?;
                     } else {
                         blank!(o, "{} <from> <to>", kind.symbolic_command());
                     }
