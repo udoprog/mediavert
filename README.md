@@ -14,6 +14,16 @@ This combines several tools as subcommands:
   tagged or untagged music from one format and directory structure to
   another.
 
+<br>
+
+## Examples
+
+You can run the included example like this:
+
+```sh
+mediavert audio --meta -D examples/unsorted --to examples/sorted
+```
+
 [`bookvert`]: https://crates.io/crates/bookvert
 [bookvert-git]: https://github.com/udoprog/mediavert/tree/main/crates/bookvert
 [`audiovert`]: https://crates.io/crates/audiovert

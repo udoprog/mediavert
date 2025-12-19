@@ -1,9 +1,8 @@
 use core::cell::Cell;
 use core::fmt;
-use core::num::NonZeroU32;
 use core::str::FromStr;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::env;
 use std::ffi::{OsStr, OsString};
 use std::fs;
@@ -18,9 +17,16 @@ use crate::meta;
 use crate::out::{Colors, Out, blank, error, info, warn};
 use crate::shell::{self, FormatCommand};
 
-const DEFAULT_MP3_BITRATE: NonZeroU32 = NonZeroU32::new(320).unwrap();
-const DEFAULT_OGG_BITRATE: NonZeroU32 = NonZeroU32::new(192).unwrap();
-const DEFAULT_AAC_BITRATE: NonZeroU32 = NonZeroU32::new(192).unwrap();
+const DEFAULT_BITRATE_AAC: u32 = 192;
+const DEFAULT_BITRATE_MP3: u32 = 320;
+const DEFAULT_BITRATE_OGG: u32 = 192;
+
+const DEFAULT_BITRATES: [(Format, u32); 3] = [
+    (Format::Aac, DEFAULT_BITRATE_AAC),
+    (Format::Mp3, DEFAULT_BITRATE_MP3),
+    (Format::Ogg, DEFAULT_BITRATE_OGG),
+];
+
 const PART: &str = "part";
 
 /// A tool to perform batch conversion of audio.
@@ -84,11 +90,15 @@ pub struct Audiovert {
     #[arg(long)]
     r#move: bool,
     /// Bitrates to use when performing conversions. This has the format
-    /// <format>=<number> where <number> is the desired bitrate in kbps.
+    /// <format>=<number> where <number> is the desired bitrate in kbps. If 0 is
+    /// set, then the default bitrate for that format is used.
     ///
     /// Default bitrates are 320kbps for mp3 and 192kbps for ogg and aac.
     #[arg(long)]
     bitrates: Vec<SetBitRate>,
+    /// If set, forces re-encoding of the formats specified in --bitrates.
+    #[arg(long)]
+    force_bitrates: bool,
     /// Path to ffmpeg binary to use when performing conversions.
     #[arg(long, default_value = "ffmpeg")]
     ffmpeg_bin: PathBuf,
@@ -112,17 +122,18 @@ struct Config {
     dry_run: bool,
     ffmpeg: PathBuf,
     force: bool,
-    meta: bool,
     keep_going: bool,
+    meta_dump_error: bool,
+    meta_dump: bool,
+    meta: bool,
     part_ext: String,
     paths: Vec<PathBuf>,
+    r#move: bool,
+    forced_bitrates: HashSet<Format>,
     to_dir: Option<PathBuf>,
     trash_source: bool,
     trash: PathBuf,
     verbose: bool,
-    meta_dump: bool,
-    meta_dump_error: bool,
-    r#move: bool,
 }
 
 impl Config {
@@ -156,19 +167,29 @@ impl Config {
 ///
 /// See [`crate`] documentation.
 pub fn entry(opts: &Audiovert) -> Result<()> {
+    // Current indentation level for output.
     let indent = Cell::new(0);
+    // Collection of bitrates.
     let mut bitrates = Bitrates::default();
+    // Formats to re-encode.
+    let mut forced_bitrates = HashSet::new();
 
     for bitrate in &opts.bitrates {
-        let to = match bitrate.format {
-            Format::Mp3 => &mut bitrates.mp3,
-            Format::Ogg => &mut bitrates.ogg,
-            _ => {
-                bail!("Unsupported format for bitrate setting: {}", bitrate.format);
-            }
-        };
+        for (format, to) in bitrate.from.pick_bitrates(&mut bitrates) {
+            let Some(default_bitrate) = format.default_bitrate() else {
+                bail!("Cannot set custom bitrate for format: {format}");
+            };
 
-        *to = bitrate.bitrate;
+            if opts.force_bitrates {
+                forced_bitrates.insert(format);
+            }
+
+            *to = if bitrate.bitrate == 0 {
+                default_bitrate
+            } else {
+                bitrate.bitrate
+            };
+        }
     }
 
     let trash = match &opts.trash {
@@ -197,17 +218,18 @@ pub fn entry(opts: &Audiovert) -> Result<()> {
         dry_run: opts.dry_run,
         ffmpeg: opts.ffmpeg_bin.clone(),
         force: opts.force,
-        meta: opts.meta,
         keep_going: opts.keep_going,
+        meta_dump_error: opts.meta_dump_error,
+        meta_dump: opts.meta_dump,
+        meta: opts.meta,
         part_ext: opts.part_ext.clone(),
         paths: opts.paths.clone(),
+        r#move: opts.r#move,
+        forced_bitrates,
         to_dir: opts.to.clone(),
         trash_source: opts.trash_source,
         trash,
         verbose: opts.verbose,
-        meta_dump: opts.meta_dump,
-        meta_dump_error: opts.meta_dump_error,
-        r#move: opts.r#move,
     };
 
     if config.paths.is_empty() {
@@ -369,7 +391,7 @@ fn run(o: &mut Out<'_>, config: &Config) -> Result<()> {
                     false
                 };
 
-                let kind = if from == to {
+                let kind = if from == to && !config.forced_bitrates.contains(&from) {
                     TaskKind::Transfer {
                         kind: if config.r#move {
                             TransferKind::Move
@@ -674,8 +696,8 @@ fn is_empty_dir(path: &PathBuf) -> bool {
 
 #[derive(Clone, Copy)]
 struct SetBitRate {
-    format: Format,
-    bitrate: NonZeroU32,
+    from: FromCondition,
+    bitrate: u32,
 }
 
 impl FromStr for SetBitRate {
@@ -683,34 +705,31 @@ impl FromStr for SetBitRate {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let (format, bitrate) = s.split_once('=').ok_or("missing '=' separator")?;
-        let format = Format::from_str(format)?;
-        let bitrate = bitrate
-            .parse::<NonZeroU32>()
-            .map_err(|_| "invalid bitrate")?;
-        Ok(SetBitRate { format, bitrate })
+        let format = FromCondition::from_str(format)?;
+        let bitrate = bitrate.parse::<u32>().map_err(|_| "invalid bitrate")?;
+        Ok(SetBitRate {
+            from: format,
+            bitrate,
+        })
     }
 }
 
 impl fmt::Display for SetBitRate {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}={}", self.format, self.bitrate)
+        write!(f, "{}={}", self.from, self.bitrate)
     }
 }
 
 struct Bitrates {
-    mp3: NonZeroU32,
-    ogg: NonZeroU32,
-    aac: NonZeroU32,
+    map: HashMap<Format, u32>,
 }
 
 impl Default for Bitrates {
     #[inline]
     fn default() -> Self {
         Self {
-            mp3: DEFAULT_MP3_BITRATE,
-            ogg: DEFAULT_OGG_BITRATE,
-            aac: DEFAULT_AAC_BITRATE,
+            map: HashMap::from(DEFAULT_BITRATES),
         }
     }
 }
@@ -723,11 +742,46 @@ enum FromCondition {
 }
 
 impl FromCondition {
+    fn pick_bitrates<'bits>(
+        &self,
+        bitrates: &'bits mut Bitrates,
+    ) -> impl Iterator<Item = (Format, &'bits mut u32)> + 'bits {
+        let this = *self;
+        bitrates
+            .map
+            .iter_mut()
+            .filter(move |(format, _)| this.matches(**format))
+            .map(|(f, v)| (*f, v))
+    }
+
     fn matches(self, format: Format) -> bool {
         match self {
             FromCondition::Lossless => format.is_lossless(),
             FromCondition::Lossy => !format.is_lossless(),
             FromCondition::Exact(f) => f == format,
+        }
+    }
+}
+
+impl FromStr for FromCondition {
+    type Err = &'static str;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "lossless" => Ok(Self::Lossless),
+            "lossy" => Ok(Self::Lossy),
+            _ => Ok(Self::Exact(Format::from_str(s)?)),
+        }
+    }
+}
+
+impl fmt::Display for FromCondition {
+    #[inline]
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            FromCondition::Lossless => write!(f, "lossless"),
+            FromCondition::Lossy => write!(f, "lossy"),
+            FromCondition::Exact(format) => format.fmt(f),
         }
     }
 }
@@ -800,12 +854,7 @@ impl FromStr for Condition {
                     return Ok(Condition::To { to });
                 };
 
-                let from = match from_str {
-                    "lossless" => FromCondition::Lossless,
-                    "lossy" => FromCondition::Lossy,
-                    _ => FromCondition::Exact(Format::from_str(from_str)?),
-                };
-
+                let from = FromCondition::from_str(from_str)?;
                 let to = ToCondition::from_str(to_str)?;
                 Ok(Condition::FromTo { from, to })
             }
@@ -813,7 +862,7 @@ impl FromStr for Condition {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 enum Format {
     Aac,
     Flac,
@@ -823,25 +872,25 @@ enum Format {
 }
 
 impl Format {
+    fn default_bitrate(&self) -> Option<u32> {
+        match self {
+            Format::Aac => Some(DEFAULT_BITRATE_AAC),
+            Format::Mp3 => Some(DEFAULT_BITRATE_MP3),
+            Format::Ogg => Some(DEFAULT_BITRATE_OGG),
+            _ => None,
+        }
+    }
+
     fn is_lossless(&self) -> bool {
         matches!(self, Format::Flac | Format::Wav)
     }
 
     fn bitrate(&self, config: &Config, command: &mut Command) {
-        match self {
-            Format::Aac => {
-                command.arg("-ab");
-                command.arg(format!("{}k", config.bitrates.aac));
-            }
-            Format::Mp3 => {
-                command.arg("-ab");
-                command.arg(format!("{}k", config.bitrates.mp3));
-            }
-            Format::Ogg => {
-                command.arg("-ab");
-                command.arg(format!("{}k", config.bitrates.ogg));
-            }
-            _ => {}
+        if let Some(bitrate) = config.bitrates.map.get(self)
+            && *bitrate > 0
+        {
+            command.arg("-ab");
+            command.arg(format!("{}k", bitrate));
         }
     }
 

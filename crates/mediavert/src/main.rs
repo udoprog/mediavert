@@ -11,6 +11,16 @@
 //!   tagged or untagged music from one format and directory structure to
 //!   another.
 //!
+//! <br>
+//!
+//! ## Examples
+//!
+//! You can run the included example like this:
+//!
+//! ```sh
+//! cargo run --release -- audio --meta -D examples/unsorted --to examples/sorted
+//! ```
+//!
 //! [`bookvert`]: https://crates.io/crates/bookvert
 //! [bookvert-git]: https://github.com/udoprog/mediavert/tree/main/crates/bookvert
 //! [`audiovert`]: https://crates.io/crates/audiovert
@@ -22,7 +32,7 @@ use clap::{Parser, Subcommand};
 #[derive(Subcommand)]
 enum Command {
     Books(bookvert::cli::Bookvert),
-    Music(audiovert::cli::Audiovert),
+    Audio(audiovert::cli::Audiovert),
 }
 
 const VERSION: &str = match option_env!("MEDIAVERT_VERSION") {
@@ -42,7 +52,7 @@ fn main() -> Result<()> {
     let opts = Opts::parse();
 
     match opts.command {
-        Command::Books(inner_opts) => bookvert::cli::entry(&inner_opts),
-        Command::Music(inner_opts) => audiovert::cli::entry(&inner_opts),
+        Command::Books(opts) => bookvert::cli::entry(&opts),
+        Command::Audio(opts) => audiovert::cli::entry(&opts),
     }
 }
