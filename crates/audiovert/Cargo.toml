@@ -1,6 +1,6 @@
 [package]
 name = "audiovert"
-version = "0.0.7"
+version = "0.0.8"
 authors = ["John-John Tedro <udoprog@tedro.se>"]
 edition = "2024"
 description = "A tool to perform batch conversion of music"
