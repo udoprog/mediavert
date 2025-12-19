@@ -44,3 +44,4 @@ mod meta;
 mod out;
 mod set_bit_rate;
 mod shell;
+mod tasks;

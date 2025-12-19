@@ -1,7 +1,6 @@
 use core::cell::Cell;
-use core::fmt;
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::HashSet;
 use std::env;
 use std::ffi::{OsStr, OsString};
 use std::fs;
@@ -12,15 +11,14 @@ use anyhow::{Context, Result, bail};
 use clap::Parser;
 use termcolor::{ColorChoice, StandardStream};
 
-use crate::archive::Archive;
 use crate::bitrates::Bitrates;
 use crate::condition::{Condition, FromCondition, ToCondition};
 use crate::config::Config;
 use crate::format::Format;
-use crate::meta;
 use crate::out::{Colors, Out, blank, error, info, warn};
 use crate::set_bit_rate::SetBitRate;
 use crate::shell::{self, FormatCommand};
+use crate::tasks::{MatchingConversion, TaskKind, Tasks, TransferKind, Trash, TrashWhat};
 
 const PART: &str = "part";
 
@@ -206,182 +204,24 @@ pub fn entry(opts: &Audiovert) -> Result<()> {
 }
 
 fn run(o: &mut Out<'_>, config: &Config) -> Result<()> {
-    let mut index = 0u32;
+    let mut tasks = Tasks::new();
 
-    let mut tag_errors = Vec::new();
-    let mut tag_items = Vec::new();
+    config.populate(&mut tasks)?;
 
-    let mut meta_dumps = Vec::new();
-    let mut errors = Vec::new();
-    let mut matching_conversions = Vec::new();
-    let mut tasks = Vec::new();
-
-    for path in &config.paths {
-        for f in ignore::Walk::new(path) {
-            let entry = f?;
-
-            let from_path = entry.path();
-
-            if !from_path.is_file() {
-                continue;
-            }
-
-            let Some(ext) = from_path.extension().and_then(|s| s.to_str()) else {
-                continue;
-            };
-
-            let Some(from) = Format::from_ext(ext) else {
-                if let Some(_archive) = Archive::from_ext(ext) {
-                    continue;
-                };
-
-                warn!(o, "Unsupported extension: {ext}");
-                let mut o = o.indent(1);
-                blank!(o, "Path: {}", shell::escape(from_path.as_os_str()));
-                continue;
-            };
-
-            let mut to_formats = BTreeSet::new();
-
-            for conversion in &config.conversion {
-                to_formats.extend(conversion.to_format(from));
-            }
-
-            if !to_formats.is_empty() && config.verbose {
-                matching_conversions.push((from_path.to_path_buf(), from, to_formats.clone()));
-            }
-
-            let id_parts = if config.meta {
-                let id_parts = meta::Parts::from_path(
-                    from_path,
-                    &mut tag_errors,
-                    (config.meta_dump || config.meta_dump_error).then_some(&mut tag_items),
-                );
-
-                let has_errors = !tag_errors.is_empty();
-
-                if !tag_errors.is_empty() {
-                    errors.push(PathError {
-                        path: from_path.to_path_buf(),
-                        messages: tag_errors.drain(..).collect(),
-                    });
-                }
-
-                if !tag_items.is_empty() {
-                    if config.meta_dump || (config.meta_dump_error && has_errors) {
-                        meta_dumps.push(meta::Dump {
-                            path: from_path.to_path_buf(),
-                            items: tag_items.drain(..).collect(),
-                        });
-                    }
-
-                    tag_items.clear();
-                }
-
-                id_parts
-            } else {
-                None
-            };
-
-            for to in to_formats {
-                let mut pre_remove = Vec::new();
-
-                let to_path = if let Some(to_dir) = &config.to_dir {
-                    match &id_parts {
-                        Some(id_parts) => {
-                            let mut to_path = to_dir.to_path_buf();
-                            id_parts.append_to(&mut to_path);
-                            to_path.add_extension(to.ext());
-                            to_path
-                        }
-                        None => {
-                            let Some(suffix) = from_path.strip_prefix(path).ok() else {
-                                errors.push(PathError {
-                                    path: from_path.to_path_buf(),
-                                    messages: vec!["Failed to get suffix for path".to_string()],
-                                });
-
-                                continue;
-                            };
-
-                            let mut to_path = to_dir.join(suffix);
-                            to_path.set_extension(to.ext());
-                            to_path
-                        }
-                    }
-                } else {
-                    match &id_parts {
-                        Some(id_parts) => {
-                            let mut to_path = path.to_path_buf();
-                            id_parts.append_to(&mut to_path);
-                            to_path.add_extension(to.ext());
-                            to_path
-                        }
-                        None => {
-                            let mut to_path = from_path.to_path_buf();
-                            to_path.set_extension(to.ext());
-                            to_path
-                        }
-                    }
-                };
-
-                if from_path == to_path {
-                    continue;
-                }
-
-                let exists = if to_path.exists() {
-                    if !config.force {
-                        warn!(o => v, "already exists (--force to remove):");
-                        let mut o = o.indent(1);
-                        blank!(o => v, "from : {}", shell::escape(from_path.as_os_str()));
-                        blank!(o => v, "to   : {}", shell::escape(to_path.as_os_str()));
-                        true
-                    } else {
-                        pre_remove.push(("destination path (--force)", to_path.clone()));
-                        false
-                    }
-                } else {
-                    false
-                };
-
-                let kind = if from == to && !config.forced_bitrates.contains(&from) {
-                    TaskKind::Transfer {
-                        kind: if config.r#move {
-                            TransferKind::Move
-                        } else {
-                            TransferKind::Link
-                        },
-                    }
-                } else {
-                    let part_path = to_path.with_added_extension(&config.part_ext);
-
-                    if part_path.exists() {
-                        pre_remove.push(("partial conversion file", part_path.clone()));
-                    }
-
-                    TaskKind::Convert {
-                        part_path,
-                        from,
-                        to,
-                        converted: exists,
-                    }
-                };
-
-                tasks.push(Task {
-                    index,
-                    kind,
-                    from_path: from_path.to_path_buf(),
-                    to_path,
-                    moved: exists,
-                    pre_remove,
-                });
-
-                index = index.saturating_add(1);
-            }
-        }
+    for (path, ext) in tasks.unsupported_extensions.drain(..) {
+        warn!(o, "Unsupported extension: {ext}");
+        let mut o = o.indent(1);
+        blank!(o, "Path: {}", shell::escape(path.as_os_str()));
     }
 
-    for e in &errors {
+    for (from, to) in tasks.already_exists.drain(..) {
+        warn!(o => v, "already exists (--force to remove):");
+        let mut o = o.indent(1);
+        blank!(o => v, "from : {}", shell::escape(from.as_os_str()));
+        blank!(o => v, "to   : {}", shell::escape(to.as_os_str()));
+    }
+
+    for e in &tasks.errors {
         error!(o, "Error: {}", shell::escape(e.path.as_os_str()));
         let mut o = o.indent(1);
 
@@ -390,15 +230,20 @@ fn run(o: &mut Out<'_>, config: &Config) -> Result<()> {
         }
     }
 
-    for d in &meta_dumps {
+    for d in &tasks.meta_dumps {
         d.dump(o)?;
     }
 
-    if !errors.is_empty() && !config.keep_going {
+    if !tasks.errors.is_empty() && !config.keep_going {
         bail!("Aborting due to previous errors, use --keep-going to ignore.");
     }
 
-    for (from_path, from, to_formats) in matching_conversions {
+    for MatchingConversion {
+        from_path,
+        from,
+        to_formats,
+    } in tasks.matching_conversions.drain(..)
+    {
         let to_formats = to_formats
             .iter()
             .map(|f| f.to_string())
@@ -410,9 +255,9 @@ fn run(o: &mut Out<'_>, config: &Config) -> Result<()> {
         blank!(o => v, "path: {}", shell::escape(from_path.as_os_str()));
     }
 
-    let total = index;
+    let total = tasks.tasks.len();
 
-    for c in &mut tasks {
+    for c in &mut tasks.tasks {
         if c.is_completed() {
             continue;
         }
@@ -547,10 +392,9 @@ fn run(o: &mut Out<'_>, config: &Config) -> Result<()> {
         }
     }
 
-    let mut to_trash = Vec::new();
     let mut n = 0u32;
 
-    for c in tasks.iter().filter(|c| c.is_completed()) {
+    for c in tasks.tasks.iter().filter(|c| c.is_completed()) {
         if !config.trash_source {
             continue;
         }
@@ -576,12 +420,15 @@ fn run(o: &mut Out<'_>, config: &Config) -> Result<()> {
             }
         };
 
-        let trash_path = config.trash.join(file_name);
-        to_trash.push(("source file", c.from_path.clone(), trash_path));
+        tasks.to_trash.push(Trash {
+            what: TrashWhat::SourceFile,
+            path: c.from_path.clone(),
+            name: file_name.to_owned(),
+        });
     }
 
     // Ensure trash directory exists.
-    if !to_trash.is_empty() && !config.trash.is_dir() {
+    if !tasks.to_trash.is_empty() && !config.trash.is_dir() {
         info!(o, "Creating trash directory");
 
         let mut o = o.indent(1);
@@ -598,18 +445,20 @@ fn run(o: &mut Out<'_>, config: &Config) -> Result<()> {
     let mut check_empty = Vec::new();
 
     // Move files to trash.
-    for (what, from, trash_path) in to_trash {
+    for Trash { what, path, name } in tasks.to_trash.drain(..) {
+        let trash_path = config.trash.join(&name);
+
         info!(o, "Trashing {what}");
         let mut o = o.indent(1);
-        blank!(o, "from : {}", shell::escape(from.as_os_str()));
+        blank!(o, "from : {}", shell::escape(path.as_os_str()));
         blank!(o, "to   : {}", shell::escape(trash_path.as_os_str()));
 
         if !config.dry_run
-            && let Err(e) = fs::rename(&from, &trash_path)
+            && let Err(e) = fs::rename(&path, &trash_path)
         {
             error!(o, "{e}");
 
-            if let Some(path) = from.parent() {
+            if let Some(path) = path.parent() {
                 check_empty.push(path.to_path_buf());
             }
         }
@@ -645,81 +494,4 @@ fn is_empty_dir(path: &PathBuf) -> bool {
     };
 
     entries.next().is_none()
-}
-
-#[derive(Debug, Clone, Copy)]
-enum TransferKind {
-    Link,
-    Move,
-}
-
-impl TransferKind {
-    fn symbolic_command(&self) -> &'static str {
-        match self {
-            TransferKind::Link => "ln",
-            TransferKind::Move => "mv",
-        }
-    }
-}
-
-impl fmt::Display for TransferKind {
-    #[inline]
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            TransferKind::Link => write!(f, "link"),
-            TransferKind::Move => write!(f, "move"),
-        }
-    }
-}
-
-enum TaskKind {
-    /// Convert from one format to another.
-    Convert {
-        part_path: PathBuf,
-        from: Format,
-        to: Format,
-        converted: bool,
-    },
-    /// Transfer from source to destination.
-    Transfer { kind: TransferKind },
-}
-
-impl TaskKind {
-    #[inline]
-    fn is_completed(&self) -> bool {
-        match self {
-            TaskKind::Convert { converted, .. } => *converted,
-            TaskKind::Transfer { .. } => true,
-        }
-    }
-}
-
-impl fmt::Display for TaskKind {
-    #[inline]
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            TaskKind::Convert { from, to, .. } => write!(f, "converting {} to {}", from, to),
-            TaskKind::Transfer { kind } => kind.fmt(f),
-        }
-    }
-}
-
-struct PathError {
-    path: PathBuf,
-    messages: Vec<String>,
-}
-
-struct Task {
-    index: u32,
-    kind: TaskKind,
-    from_path: PathBuf,
-    to_path: PathBuf,
-    moved: bool,
-    pre_remove: Vec<(&'static str, PathBuf)>,
-}
-
-impl Task {
-    fn is_completed(&self) -> bool {
-        self.kind.is_completed() && self.moved && self.pre_remove.is_empty()
-    }
 }
