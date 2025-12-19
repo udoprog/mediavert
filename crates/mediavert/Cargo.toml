@@ -1,6 +1,6 @@
 [package]
 name = "mediavert"
-version = "0.0.5"
+version = "0.0.6"
 authors = ["John-John Tedro <udoprog@tedro.se>"]
 edition = "2024"
 description = "A tool to perform batch conversion of media"
@@ -13,8 +13,8 @@ keywords = ["cbz", "cli", "tui"]
 categories = ["command-line-utilities"]
 
 [dependencies]
-bookvert = { path = "../bookvert", version = "0.0.5" }
-audiovert = { path = "../audiovert", version = "0.0.5" }
+bookvert = { path = "../bookvert", version = "0.0.6" }
+audiovert = { path = "../audiovert", version = "0.0.6" }
 
 anyhow.workspace = true
 clap.workspace = true
