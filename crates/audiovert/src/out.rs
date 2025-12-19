@@ -2,7 +2,6 @@ use core::cell::Cell;
 use core::fmt;
 
 use std::io;
-use std::path::Path;
 
 use termcolor::ColorSpec;
 use termcolor::HyperlinkSpec;
@@ -25,6 +24,9 @@ pub(crate) use __blank as blank;
 pub(crate) use __error as error;
 pub(crate) use __info as info;
 pub(crate) use __warn as warn;
+
+use crate::link::Linkable;
+use crate::shell;
 
 pub(crate) struct Colors {
     info: ColorSpec,
@@ -92,22 +94,21 @@ impl<'a> Out<'a> {
     pub(crate) fn link(
         &mut self,
         header: impl fmt::Display,
-        value: impl fmt::Display,
-        to: Option<&Path>,
+        link: &dyn Linkable,
     ) -> io::Result<()> {
         self.prefix()?;
         write!(self.o, "{header}: ")?;
 
-        if let Some(to) = to {
+        if let Some(to) = link.link() {
             let mut link = Vec::from(b"file://");
             link.extend_from_slice(to.as_os_str().as_encoded_bytes());
             let open = HyperlinkSpec::open(&link);
             self.o.set_hyperlink(&open)?;
         }
 
-        writeln!(self.o, "{value}")?;
+        writeln!(self.o, "{}", shell::path(link.path()))?;
 
-        if to.is_some() {
+        if link.link().is_some() {
             let close = HyperlinkSpec::close();
             self.o.set_hyperlink(&close)?;
         }

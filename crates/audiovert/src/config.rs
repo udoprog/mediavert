@@ -11,6 +11,7 @@ use crate::archive::Archive;
 use crate::bitrates::Bitrates;
 use crate::condition::Condition;
 use crate::format::Format;
+use crate::link::{Link, Linkable, MaybeLink};
 use crate::meta;
 use crate::out::{Out, blank, error, info};
 use crate::shell;
@@ -77,8 +78,7 @@ impl Config {
                 if let Some(kind) = Archive::from_ext(ext) {
                     let archive_id = tasks.archives.push(SourceArchive {
                         kind,
-                        path: walked.to_path_buf(),
-                        absolute_path: fs::canonicalize(walked)?,
+                        path: Link::new(walked)?,
                     });
 
                     let mut archive_path = walked.parent().unwrap_or(Path::new("")).to_path_buf();
@@ -118,8 +118,7 @@ impl Config {
                     })?;
                 } else {
                     let source = Source::File {
-                        path: walked.to_path_buf(),
-                        absolute_path: fs::canonicalize(walked)?,
+                        path: Link::new(walked)?,
                     };
 
                     sources.push(source);
@@ -228,28 +227,22 @@ impl Config {
                             continue;
                         }
 
+                        let to_path = MaybeLink::new(to_path);
                         let exists;
-                        let to_path_absolute;
 
                         if to_path.exists() {
                             if !self.force {
                                 tasks.already_exists.push(Exists {
                                     source: source.clone(),
-                                    path: to_path.clone(),
-                                    absolute_path: fs::canonicalize(&to_path)?,
+                                    path: Link::new(&to_path)?,
                                 });
-
                                 exists = true;
                             } else {
                                 pre_remove.push(("destination path (--force)", to_path.clone()));
-
                                 exists = false;
                             }
-
-                            to_path_absolute = Some(fs::canonicalize(&to_path)?);
                         } else {
                             exists = false;
-                            to_path_absolute = None;
                         };
 
                         let kind = if from == to && !self.forced_bitrates.contains(&from) {
@@ -266,7 +259,8 @@ impl Config {
                                 },
                             }
                         } else {
-                            let part_path = to_path.with_added_extension(&self.part_ext);
+                            let part_path =
+                                MaybeLink::new(to_path.with_added_extension(&self.part_ext));
 
                             if part_path.exists() {
                                 pre_remove.push(("partial conversion file", part_path.clone()));
@@ -287,7 +281,6 @@ impl Config {
                             kind,
                             source: source.clone(),
                             to_path,
-                            to_path_absolute,
                             moved: exists,
                             pre_remove: pre_remove.drain(..).collect(),
                         });
@@ -310,7 +303,7 @@ impl Config {
             return Ok(true);
         };
 
-        if parent.is_dir() {
+        if parent.components().next().is_none() || parent.is_dir() {
             return Ok(true);
         }
 
@@ -339,9 +332,7 @@ pub(crate) struct SourceArchive {
     /// Kind of the archive.
     pub(crate) kind: Archive,
     /// Path to the archive.
-    pub(crate) path: PathBuf,
-    /// Absolute path to the archive.
-    pub(crate) absolute_path: PathBuf,
+    pub(crate) path: Link,
 }
 
 impl SourceArchive {
@@ -413,9 +404,7 @@ pub(crate) enum Source {
     /// A regular file in the filesystem.
     File {
         /// The path to the file.
-        path: PathBuf,
-        /// The absolute path to the file.
-        absolute_path: PathBuf,
+        path: Link,
     },
     /// A file inside an archive.
     Archive {
@@ -477,11 +466,11 @@ impl Source {
     /// Convert an in-place source path to a regular filesystem path.
     pub(crate) fn to_path(&self, archives: &Archives) -> Result<PathBuf> {
         match self {
-            Self::File { path, .. } => Ok(path.clone()),
+            Self::File { path, .. } => Ok(path.path().to_owned()),
             Self::Archive { archive, path } => {
                 let archive = archives.get(*archive).context("no archive directory")?;
 
-                let mut to_path = archive.path.to_owned();
+                let mut to_path = archive.path.path().to_owned();
 
                 to_path.pop();
 
@@ -543,21 +532,14 @@ impl Source {
     /// Dump source information.
     pub(crate) fn dump(&self, o: &mut Out<'_>, archives: &Archives) -> Result<()> {
         match self {
-            Self::File {
-                path,
-                absolute_path,
-            } => {
-                o.link("from", shell::path(path), Some(absolute_path))?;
+            Self::File { path } => {
+                o.link("from", path)?;
             }
             Self::Archive { archive, path } => {
                 let archive = archives.get(*archive)?;
-                o.link(
-                    archive.kind,
-                    shell::path(&archive.path),
-                    Some(&archive.absolute_path),
-                )?;
+                o.link(archive.kind, &archive.path)?;
                 let mut o = o.indent(1);
-                blank!(o, "name: {path}");
+                blank!(o, "/{path}");
             }
         }
 

@@ -55,6 +55,7 @@ pub mod cli;
 mod condition;
 mod config;
 mod format;
+mod link;
 mod meta;
 mod out;
 mod set_bit_rate;

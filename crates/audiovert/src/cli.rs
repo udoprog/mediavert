@@ -17,6 +17,7 @@ use crate::bitrates::Bitrates;
 use crate::condition::{Condition, FromCondition, ToCondition};
 use crate::config::{ArchiveId, Archives, Config, Source};
 use crate::format::Format;
+use crate::link::MaybeLink;
 use crate::out::{Colors, Out, blank, error, info, warn};
 use crate::set_bit_rate::SetBitRate;
 use crate::shell::{self, FormatCommand};
@@ -219,16 +220,11 @@ fn run(o: &mut Out<'_>, config: &Config) -> Result<()> {
     }
 
     if config.verbose {
-        for Exists {
-            source,
-            path,
-            absolute_path,
-        } in tasks.already_exists.drain(..)
-        {
+        for Exists { source, path } in tasks.already_exists.drain(..) {
             warn!(o, "already exists (--force to remove):");
             let mut o = o.indent(1);
             source.dump(&mut o, &tasks.archives)?;
-            o.link("to", shell::path(&path), Some(&absolute_path))?;
+            o.link("to", &path)?;
         }
     }
 
@@ -285,7 +281,7 @@ fn run(o: &mut Out<'_>, config: &Config) -> Result<()> {
         let mut o = o.indent(1);
 
         c.source.dump(&mut o, &tasks.archives)?;
-        o.link("to", shell::path(&c.to_path), c.to_path_absolute.as_deref())?;
+        o.link("to", &c.to_path)?;
 
         for (reason, path) in c.pre_remove.drain(..) {
             info!(o, "removing {reason}");
@@ -390,8 +386,8 @@ fn run(o: &mut Out<'_>, config: &Config) -> Result<()> {
                         let mut o = o.indent(1);
 
                         if config.verbose {
-                            blank!(o, "from: {}", shell::path(part_path));
-                            o.link("to", shell::path(&c.to_path), c.to_path_absolute.as_deref())?;
+                            o.link("from", part_path)?;
+                            o.link("to", &c.to_path)?;
                         }
 
                         if !config.dry_run {
@@ -414,7 +410,7 @@ fn run(o: &mut Out<'_>, config: &Config) -> Result<()> {
 
                     if config.verbose {
                         c.source.dump(&mut o, &tasks.archives)?;
-                        o.link("to", shell::path(&c.to_path), c.to_path_absolute.as_deref())?;
+                        o.link("to", &c.to_path)?;
                     } else {
                         blank!(o, "{} <from> <to>", kind.symbolic_command());
                     }
@@ -494,12 +490,12 @@ fn run(o: &mut Out<'_>, config: &Config) -> Result<()> {
 
     // Move files to trash.
     for Trash { what, path, name } in tasks.to_trash.drain(..) {
-        let trash_path = config.trash.join(&name);
+        let trash_path = MaybeLink::new(config.trash.join(&name));
 
         info!(o, "Trashing {what}");
         let mut o = o.indent(1);
-        blank!(o, "from: {}", shell::path(&path));
-        blank!(o, "to: {}", shell::path(&trash_path));
+        o.link("from", &path)?;
+        o.link("to", &trash_path)?;
 
         if !config.dry_run
             && let Err(e) = fs::rename(&path, &trash_path)

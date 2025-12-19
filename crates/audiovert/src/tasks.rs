@@ -1,10 +1,10 @@
 use core::fmt;
 
 use std::ffi::OsString;
-use std::path::PathBuf;
 
 use crate::config::{Archives, Source};
 use crate::format::Format;
+use crate::link::{Link, MaybeLink};
 use crate::meta::Dump;
 
 pub(crate) struct Tasks {
@@ -66,7 +66,7 @@ impl fmt::Display for TransferKind {
 pub(crate) enum TaskKind {
     /// Convert from one format to another.
     Convert {
-        part_path: PathBuf,
+        part_path: MaybeLink,
         from: Format,
         to: Format,
         converted: bool,
@@ -109,10 +109,9 @@ pub(crate) struct Task {
     pub(crate) index: usize,
     pub(crate) kind: TaskKind,
     pub(crate) source: Source,
-    pub(crate) to_path: PathBuf,
-    pub(crate) to_path_absolute: Option<PathBuf>,
+    pub(crate) to_path: MaybeLink,
     pub(crate) moved: bool,
-    pub(crate) pre_remove: Vec<(&'static str, PathBuf)>,
+    pub(crate) pre_remove: Vec<(&'static str, MaybeLink)>,
 }
 
 impl Task {
@@ -142,14 +141,13 @@ impl fmt::Display for TrashWhat {
 
 pub(crate) struct Trash {
     pub(crate) what: TrashWhat,
-    pub(crate) path: PathBuf,
+    pub(crate) path: Link,
     pub(crate) name: OsString,
 }
 
 pub(crate) struct Exists {
     pub(crate) source: Source,
-    pub(crate) path: PathBuf,
-    pub(crate) absolute_path: PathBuf,
+    pub(crate) path: Link,
 }
 
 pub(crate) struct Unsupported {
