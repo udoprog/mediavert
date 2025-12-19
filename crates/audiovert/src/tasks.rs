@@ -13,7 +13,7 @@ pub(crate) struct Tasks {
     pub(crate) matching_conversions: Vec<MatchingConversion>,
     pub(crate) tasks: Vec<Task>,
     pub(crate) to_trash: Vec<Trash>,
-    pub(crate) already_exists: Vec<(Source, PathBuf)>,
+    pub(crate) already_exists: Vec<Exists>,
     pub(crate) unsupported: Vec<Unsupported>,
     pub(crate) archives: Archives,
 }
@@ -110,6 +110,7 @@ pub(crate) struct Task {
     pub(crate) kind: TaskKind,
     pub(crate) source: Source,
     pub(crate) to_path: PathBuf,
+    pub(crate) to_absolute_path: Option<PathBuf>,
     pub(crate) moved: bool,
     pub(crate) pre_remove: Vec<(&'static str, PathBuf)>,
 }
@@ -143,6 +144,12 @@ pub(crate) struct Trash {
     pub(crate) what: TrashWhat,
     pub(crate) path: PathBuf,
     pub(crate) name: OsString,
+}
+
+pub(crate) struct Exists {
+    pub(crate) source: Source,
+    pub(crate) path: PathBuf,
+    pub(crate) absolute_path: PathBuf,
 }
 
 pub(crate) struct Unsupported {

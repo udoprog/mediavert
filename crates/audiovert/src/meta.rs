@@ -29,7 +29,7 @@ impl Parts {
         tag_items: Option<&mut Vec<TagItem>>,
     ) -> Result<Self> {
         let file: TaggedFile = match &source.origin {
-            Origin::File { path } => lofty::read_from_path(path)?,
+            Origin::File { path, .. } => lofty::read_from_path(path)?,
             Origin::Archive { archive, path } => {
                 let contents = archives.contents(*archive, path)?;
                 let mut probe = Probe::new(Cursor::new(contents));

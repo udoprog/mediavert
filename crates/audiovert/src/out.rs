@@ -2,8 +2,10 @@ use core::cell::Cell;
 use core::fmt;
 
 use std::io;
+use std::path::Path;
 
 use termcolor::ColorSpec;
+use termcolor::HyperlinkSpec;
 use termcolor::WriteColor;
 
 macro_rules! __log {
@@ -83,6 +85,33 @@ impl<'a> Out<'a> {
     pub(crate) fn blank(&mut self, m: impl fmt::Display) -> io::Result<()> {
         self.prefix()?;
         writeln!(self.o, "{m}")?;
+        self.o.flush()?;
+        Ok(())
+    }
+
+    pub(crate) fn blank_link(
+        &mut self,
+        header: impl fmt::Display,
+        value: impl fmt::Display,
+        to: Option<&Path>,
+    ) -> io::Result<()> {
+        self.prefix()?;
+        write!(self.o, "{header}: ")?;
+
+        if let Some(to) = to {
+            let link = format!("file://{}", to.display());
+            let open = HyperlinkSpec::open(link.as_bytes());
+            self.o.set_hyperlink(&open)?;
+        }
+
+        writeln!(self.o, "{value}")?;
+
+        if to.is_some() {
+            let close = HyperlinkSpec::close();
+            self.o.set_hyperlink(&close)?;
+        }
+
+        self.o.reset()?;
         self.o.flush()?;
         Ok(())
     }

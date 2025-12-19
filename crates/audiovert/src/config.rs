@@ -15,7 +15,7 @@ use crate::meta;
 use crate::out::{Out, blank, error, info};
 use crate::shell;
 use crate::tasks::{
-    MatchingConversion, PathError, Task, TaskKind, Tasks, TransferKind, Unsupported,
+    Exists, MatchingConversion, PathError, Task, TaskKind, Tasks, TransferKind, Unsupported,
 };
 
 /// Configuration for conversions.
@@ -77,6 +77,7 @@ impl Config {
                     let archive_id = tasks.archives.push(ArchiveOrigin {
                         kind,
                         path: walked.to_path_buf(),
+                        absolute_path: fs::canonicalize(walked)?,
                     });
 
                     let mut archive_path = walked.parent().unwrap_or(Path::new("")).to_path_buf();
@@ -120,6 +121,7 @@ impl Config {
                     let source = Source {
                         origin: Origin::File {
                             path: walked.to_path_buf(),
+                            absolute_path: fs::canonicalize(walked)?,
                         },
                     };
 
@@ -225,13 +227,20 @@ impl Config {
                             }
                         };
 
+                        // TODO: Fill this out.
+                        let to_absolute_path = None;
+
                         if source.as_file().is_some_and(|p| p == to_path) {
                             continue;
                         }
 
                         let exists = if to_path.exists() {
                             if !self.force {
-                                tasks.already_exists.push((source.clone(), to_path.clone()));
+                                tasks.already_exists.push(Exists {
+                                    source: source.clone(),
+                                    path: to_path.clone(),
+                                    absolute_path: fs::canonicalize(&to_path)?,
+                                });
                                 true
                             } else {
                                 pre_remove.push(("destination path (--force)", to_path.clone()));
@@ -276,6 +285,7 @@ impl Config {
                             kind,
                             source: source.clone(),
                             to_path,
+                            to_absolute_path,
                             moved: exists,
                             pre_remove,
                         });
@@ -304,7 +314,7 @@ impl Config {
 
         info!(o, "making {what} dir");
         let mut o = o.indent(1);
-        blank!(o, "mkdir -p {}", shell::escape(parent.as_os_str()));
+        blank!(o, "mkdir -p {}", shell::path(parent));
 
         if self.dry_run {
             return Ok(true);
@@ -326,6 +336,8 @@ pub(crate) struct ArchiveOrigin {
     pub(crate) kind: Archive,
     /// Path to the archive.
     pub(crate) path: PathBuf,
+    /// Absolute path to the archive.
+    pub(crate) absolute_path: PathBuf,
 }
 
 impl ArchiveOrigin {
@@ -346,7 +358,12 @@ impl ArchiveOrigin {
 #[derive(Clone)]
 pub(crate) enum Origin {
     /// A regular file in the filesystem.
-    File { path: PathBuf },
+    File {
+        /// The path to the file.
+        path: PathBuf,
+        /// The absolute path to the file.
+        absolute_path: PathBuf,
+    },
     /// A file inside an archive.
     Archive {
         /// Archive identifier.
@@ -420,7 +437,7 @@ impl Source {
         to_path: &mut PathBuf,
     ) -> Result<()> {
         match &self.origin {
-            Origin::File { path } => {
+            Origin::File { path, .. } => {
                 let Ok(suffix) = path.strip_prefix(base) else {
                     bail!("invalid base path");
                 };
@@ -462,7 +479,7 @@ impl Source {
     /// Convert an in-place source path to a regular filesystem path.
     pub(crate) fn to_path(&self, archives: &Archives) -> Result<PathBuf> {
         match &self.origin {
-            Origin::File { path } => Ok(path.clone()),
+            Origin::File { path, .. } => Ok(path.clone()),
             Origin::Archive { archive, path } => {
                 let archive = archives.get(*archive).context("no archive directory")?;
 
@@ -501,7 +518,7 @@ impl Source {
                     fs::write(to, contents).context("writing file")?;
                 }
             },
-            Origin::File { path } => match kind {
+            Origin::File { path, .. } => match kind {
                 TransferKind::Link => {
                     fs::hard_link(path, to).context("creating hard link")?;
                 }
@@ -520,7 +537,7 @@ impl Source {
     /// Get the extension of the source file.
     pub(crate) fn ext(&self) -> Option<&str> {
         match &self.origin {
-            Origin::File { path } => path.extension().and_then(|s| s.to_str()),
+            Origin::File { path, .. } => path.extension().and_then(|s| s.to_str()),
             Origin::Archive { path, .. } => path.extension(),
         }
     }
@@ -528,18 +545,20 @@ impl Source {
     /// Dump source information.
     pub(crate) fn dump(&self, o: &mut Out<'_>, archives: &Archives) -> Result<()> {
         match &self.origin {
-            Origin::File { path } => {
-                blank!(o, "file: {}", shell::escape(path.as_os_str()));
+            Origin::File {
+                path,
+                absolute_path,
+            } => {
+                o.blank_link("file", shell::path(path), Some(absolute_path))?;
             }
             Origin::Archive { archive, path } => {
                 let archive = archives.get(*archive)?;
-                blank!(
-                    o,
-                    "{}: {} ({})",
+                o.blank_link(
                     archive.kind,
-                    shell::escape(archive.path.as_os_str()),
-                    path.as_str(),
-                );
+                    shell::path(&archive.path),
+                    Some(&archive.absolute_path),
+                )?;
+                blank!(o, "file: {path}");
             }
         }
 
@@ -549,7 +568,7 @@ impl Source {
     /// Get the file path if the source is a regular file.
     pub(crate) fn as_file(&self) -> Option<&Path> {
         match &self.origin {
-            Origin::File { path } => Some(path),
+            Origin::File { path, .. } => Some(path),
             Origin::Archive { .. } => None,
         }
     }

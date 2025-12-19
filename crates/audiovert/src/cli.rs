@@ -21,7 +21,7 @@ use crate::out::{Colors, Out, blank, error, info, warn};
 use crate::set_bit_rate::SetBitRate;
 use crate::shell::{self, FormatCommand};
 use crate::tasks::{
-    MatchingConversion, TaskKind, Tasks, TransferKind, Trash, TrashWhat, Unsupported,
+    Exists, MatchingConversion, TaskKind, Tasks, TransferKind, Trash, TrashWhat, Unsupported,
 };
 
 const PART: &str = "part";
@@ -219,11 +219,16 @@ fn run(o: &mut Out<'_>, config: &Config) -> Result<()> {
     }
 
     if config.verbose {
-        for (from, to) in tasks.already_exists.drain(..) {
+        for Exists {
+            source,
+            path,
+            absolute_path,
+        } in tasks.already_exists.drain(..)
+        {
             warn!(o, "already exists (--force to remove):");
             let mut o = o.indent(1);
-            from.dump(&mut o, &tasks.archives)?;
-            blank!(o, "to: {}", shell::escape(to.as_os_str()));
+            source.dump(&mut o, &tasks.archives)?;
+            o.blank_link("to", shell::path(&path), Some(&absolute_path))?;
         }
     }
 
@@ -280,14 +285,18 @@ fn run(o: &mut Out<'_>, config: &Config) -> Result<()> {
         let mut o = o.indent(1);
 
         c.source.dump(&mut o, &tasks.archives)?;
-        blank!(o, "to: {}", shell::escape(c.to_path.as_os_str()));
+        o.blank_link(
+            "to:",
+            shell::path(&c.to_path),
+            c.to_absolute_path.as_deref(),
+        )?;
 
         for (reason, path) in c.pre_remove.drain(..) {
             info!(o, "removing {reason}");
             let mut o = o.indent(1);
 
             if config.verbose {
-                blank!(o, "rm {}", shell::escape(path.as_os_str()));
+                blank!(o, "rm {}", shell::path(&path));
             } else {
                 blank!(o, "rm <to>.{}", config.part_ext);
             }
@@ -308,7 +317,7 @@ fn run(o: &mut Out<'_>, config: &Config) -> Result<()> {
             } => {
                 if !*converted {
                     let (argument, archive) = match &c.source.origin {
-                        Origin::File { path } => (path.as_os_str(), None),
+                        Origin::File { path, .. } => (path.as_os_str(), None),
                         Origin::Archive { archive, path } => {
                             (OsStr::new("pipe:"), Some((*archive, path)))
                         }
@@ -385,8 +394,8 @@ fn run(o: &mut Out<'_>, config: &Config) -> Result<()> {
                         let mut o = o.indent(1);
 
                         if config.verbose {
-                            blank!(o, "from: {}", shell::escape(part_path.as_os_str()));
-                            blank!(o, "to: {}", shell::escape(c.to_path.as_os_str()));
+                            blank!(o, "from: {}", shell::path(part_path));
+                            blank!(o, "to: {}", shell::path(&c.to_path));
                         }
 
                         if !config.dry_run {
@@ -409,7 +418,7 @@ fn run(o: &mut Out<'_>, config: &Config) -> Result<()> {
 
                     if config.verbose {
                         c.source.dump(&mut o, &tasks.archives)?;
-                        blank!(o, "to: {}", shell::escape(c.to_path.as_os_str()));
+                        blank!(o, "to: {}", shell::path(&c.to_path));
                     } else {
                         blank!(o, "{} <from> <to>", kind.symbolic_command());
                     }
@@ -449,7 +458,7 @@ fn run(o: &mut Out<'_>, config: &Config) -> Result<()> {
 
         let path = match &c.source.origin {
             Origin::Archive { .. } => continue,
-            Origin::File { path } => path,
+            Origin::File { path, .. } => path,
         };
 
         let new;
@@ -476,7 +485,7 @@ fn run(o: &mut Out<'_>, config: &Config) -> Result<()> {
 
         let mut o = o.indent(1);
 
-        blank!(o, "path: {}", shell::escape(config.trash.as_os_str()));
+        blank!(o, "path: {}", shell::path(&config.trash));
 
         if !config.dry_run
             && let Err(e) = fs::create_dir_all(&config.trash)
@@ -493,8 +502,8 @@ fn run(o: &mut Out<'_>, config: &Config) -> Result<()> {
 
         info!(o, "Trashing {what}");
         let mut o = o.indent(1);
-        blank!(o, "from: {}", shell::escape(path.as_os_str()));
-        blank!(o, "to: {}", shell::escape(trash_path.as_os_str()));
+        blank!(o, "from: {}", shell::path(&path));
+        blank!(o, "to: {}", shell::path(&trash_path));
 
         if !config.dry_run
             && let Err(e) = fs::rename(&path, &trash_path)
@@ -515,7 +524,7 @@ fn run(o: &mut Out<'_>, config: &Config) -> Result<()> {
 
         info!(o, "removing empty directory:");
         let mut o = o.indent(1);
-        blank!(o, "path: {}", shell::escape(path.as_os_str()));
+        blank!(o, "path: {}", shell::path(&path));
 
         if !config.dry_run {
             if let Err(e) = fs::remove_dir(&path) {

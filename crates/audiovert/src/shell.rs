@@ -3,7 +3,36 @@ use core::fmt;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::ffi::OsStr;
+use std::path::Path;
 use std::process::Command;
+
+pub(crate) fn path(path: &Path) -> impl fmt::Display + '_ {
+    #[repr(transparent)]
+    struct Format(OsStr);
+
+    impl Format {
+        fn new(s: &OsStr) -> &Self {
+            // SAFETY: repr(transparent)
+            unsafe { &*(s as *const OsStr as *const Format) }
+        }
+    }
+
+    impl fmt::Display for Format {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            for chunk in self.0.as_encoded_bytes().utf8_chunks() {
+                f.write_str(chunk.valid())?;
+
+                for &b in chunk.invalid() {
+                    write!(f, "\\u{{{:04x}}}", b)?;
+                }
+            }
+
+            Ok(())
+        }
+    }
+
+    Format::new(path.as_os_str())
+}
 
 pub(crate) fn escape(s: &OsStr) -> Cow<'_, str> {
     let Some(s) = s.to_str() else {
