@@ -26,8 +26,8 @@ impl Parts {
         source: &Source,
         db: &Db,
         errors: &mut Vec<String>,
-        tag_items: Option<&mut Vec<TagItem>>,
-    ) -> Result<Self> {
+        tag_items: &mut Vec<TagItem>,
+    ) -> Result<Option<Self>> {
         let file: TaggedFile = match source {
             Source::File { file } => {
                 let path = db.file(*file)?;
@@ -47,10 +47,8 @@ impl Parts {
 
         let tag = file.primary_tag().context("missing primary tag")?;
 
-        if let Some(tag_items) = tag_items {
-            for item in tag.items() {
-                tag_items.push(item.clone());
-            }
+        for item in tag.items() {
+            tag_items.push(item.clone());
         }
 
         macro_rules! get_str {
@@ -171,7 +169,7 @@ impl Parts {
             })
         };
 
-        value().context("incomplete tag information")
+        Ok(value())
     }
 
     /// Append parts to a buffer.
@@ -290,23 +288,29 @@ fn sanitize(s: &str) -> Cow<'_, str> {
     Cow::Owned(out)
 }
 
-pub(super) struct Dump {
-    pub(super) source: Source,
+pub(super) struct Meta {
     pub(super) items: Vec<TagItem>,
 }
 
-impl Dump {
-    pub(crate) fn dump(&self, o: &mut Out<'_>, db: &Db) -> Result<()> {
-        info!(o, "Tags:");
-        let mut o = o.indent(1);
-
-        db.dump(&mut o, &self.source)?;
-
+impl Meta {
+    pub(crate) fn dump(&self, o: &mut Out<'_>) -> Result<()> {
         for item in &self.items {
-            dump_tag_item(&mut o, item)?;
+            dump_tag_item(o, item)?;
         }
 
         Ok(())
+    }
+}
+
+impl FromIterator<TagItem> for Meta {
+    #[inline]
+    fn from_iter<T>(iter: T) -> Self
+    where
+        T: IntoIterator<Item = TagItem>,
+    {
+        Self {
+            items: iter.into_iter().collect(),
+        }
     }
 }
 

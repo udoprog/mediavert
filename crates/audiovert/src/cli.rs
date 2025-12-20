@@ -236,10 +236,27 @@ fn run(o: &mut Out<'_>, config: &Config) -> Result<()> {
         for m in &e.messages {
             error!(o, "{m}");
         }
+
+        if config.meta_dump_error
+            && let Some(m) = tasks.meta.get(&e.source)
+        {
+            let mut o = o.indent(1);
+            m.dump(&mut o)?;
+        }
     }
 
-    for d in &tasks.meta_dumps {
-        d.dump(o, &tasks.db)?;
+    if config.meta_dump {
+        for task in &tasks.tasks {
+            tasks.db.dump(o, &task.source)?;
+
+            if let Some(m) = tasks.meta.get(&task.source) {
+                info!(o, "Meta:");
+                let mut o = o.indent(1);
+                m.dump(&mut o)?;
+            } else {
+                info!(o, "Meta: <none>");
+            }
+        }
     }
 
     if !tasks.errors.is_empty() && !config.keep_going {

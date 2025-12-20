@@ -1,14 +1,14 @@
 use core::fmt;
 
+use std::collections::HashMap;
 use std::ffi::OsString;
 
 use crate::config::{Db, Source};
 use crate::format::Format;
 use crate::link::{Link, MaybeLink};
-use crate::meta::Dump;
+use crate::meta::Meta;
 
 pub(crate) struct Tasks {
-    pub(crate) meta_dumps: Vec<Dump>,
     pub(crate) errors: Vec<PathError>,
     pub(crate) matching_conversions: Vec<MatchingConversion>,
     pub(crate) tasks: Vec<Task>,
@@ -16,12 +16,12 @@ pub(crate) struct Tasks {
     pub(crate) already_exists: Vec<Exists>,
     pub(crate) unsupported: Vec<Unsupported>,
     pub(crate) db: Db,
+    pub(crate) meta: HashMap<Source, Meta>,
 }
 
 impl Tasks {
     pub(crate) fn new() -> Self {
         Self {
-            meta_dumps: Vec::new(),
             errors: Vec::new(),
             matching_conversions: Vec::new(),
             tasks: Vec::new(),
@@ -29,6 +29,7 @@ impl Tasks {
             already_exists: Vec::new(),
             unsupported: Vec::new(),
             db: Db::new(),
+            meta: HashMap::new(),
         }
     }
 }

@@ -146,23 +146,27 @@ impl Config {
                         });
                     }
 
-                    let id_parts = if self.meta {
-                        let id_parts = meta::Parts::from_path(
-                            &source,
-                            &tasks.db,
-                            &mut tag_errors,
-                            (self.meta_dump || self.meta_dump_error).then_some(&mut tag_items),
-                        );
+                    debug_assert!(tag_items.is_empty());
 
-                        let id_parts = match id_parts {
-                            Ok(id_parts) => Some(id_parts),
-                            Err(e) => {
-                                tag_errors.push(format!("failed to read tags: {e}"));
-                                None
-                            }
+                    let id_parts = meta::Parts::from_path(
+                        &source,
+                        &tasks.db,
+                        &mut tag_errors,
+                        &mut tag_items,
+                    )?;
+
+                    if !tag_items.is_empty() {
+                        let meta = tag_items.drain(..).collect();
+                        tasks.meta.insert(source.clone(), meta);
+                    }
+
+                    let meta_parts = if self.meta {
+                        let Some(id_parts) = id_parts else {
+                            tag_errors.push(format!(
+                                "could not extract required tags (see --meta-dump-error)"
+                            ));
+                            continue;
                         };
-
-                        let has_errors = !tag_errors.is_empty();
 
                         if !tag_errors.is_empty() {
                             tasks.errors.push(PathError {
@@ -171,18 +175,7 @@ impl Config {
                             });
                         }
 
-                        if !tag_items.is_empty() {
-                            if self.meta_dump || (self.meta_dump_error && has_errors) {
-                                tasks.meta_dumps.push(meta::Dump {
-                                    source: source.clone(),
-                                    items: tag_items.drain(..).collect(),
-                                });
-                            }
-
-                            tag_items.clear();
-                        }
-
-                        id_parts
+                        Some(id_parts)
                     } else {
                         None
                     };
@@ -191,10 +184,10 @@ impl Config {
                         debug_assert!(pre_remove.is_empty());
 
                         let to_path = if let Some(to_dir) = &self.to_dir {
-                            match &id_parts {
-                                Some(id_parts) => {
+                            match &meta_parts {
+                                Some(meta_parts) => {
                                     let mut to_path = to_dir.to_path_buf();
-                                    id_parts.append_to(&mut to_path);
+                                    meta_parts.append_to(&mut to_path);
                                     to_path.add_extension(to.ext());
                                     to_path
                                 }
@@ -206,10 +199,10 @@ impl Config {
                                 }
                             }
                         } else {
-                            match &id_parts {
-                                Some(id_parts) => {
+                            match &meta_parts {
+                                Some(meta_parts) => {
                                     let mut to_path = dir.to_path_buf();
-                                    id_parts.append_to(&mut to_path);
+                                    meta_parts.append_to(&mut to_path);
                                     to_path.add_extension(to.ext());
                                     to_path
                                 }
@@ -348,7 +341,7 @@ impl SourceArchive {
 }
 
 /// Unique and internal identifier for a source file.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct FileId(usize);
 
 impl fmt::Display for FileId {
@@ -359,7 +352,7 @@ impl fmt::Display for FileId {
 }
 
 /// Unique and internal identifier for a source archive.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct ArchiveId(usize);
 
 impl fmt::Display for ArchiveId {
@@ -583,7 +576,7 @@ impl Db {
 }
 
 /// A source file for conversion or transfer.
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub(crate) enum Source {
     /// A regular file in the filesystem.
     File {
