@@ -57,12 +57,12 @@ pub struct Bookvert {
     /// Perform a trial run with no changes made.
     #[arg(long)]
     dry_run: bool,
-    /// Specify a regular expression for a name to skip.
-    #[arg(long)]
-    skip: Vec<String>,
+    /// Specify a regular expression for a name or volume patern to skip.
+    #[arg(long, short = 'e')]
+    exclude: Vec<Pat>,
     /// Only include series numbers matching these predicates.
     #[arg(long)]
-    include: Vec<From>,
+    include: Vec<Pat>,
     /// Series for ComicInfo.xml metadata.
     #[arg(long)]
     series: Option<String>,
@@ -204,8 +204,9 @@ impl fmt::Display for To {
 }
 
 #[derive(Clone)]
-enum From {
+enum Pat {
     Full,
+    Regex(Regex),
     Single(u32),
     RangeInclusive(u32, u32),
     Range(u32, u32),
@@ -214,22 +215,36 @@ enum From {
     RangeToInclusive(u32),
 }
 
-impl From {
-    /// Returns true if the book number matches the predicate.
-    fn matches(&self, number: u32) -> bool {
+impl Pat {
+    fn matches_catalog(&self, c: &Catalog) -> bool {
         match *self {
-            From::Full => true,
-            From::Single(n) => n == number,
-            From::RangeInclusive(start, end) => (start..=end).contains(&number),
-            From::Range(start, end) => (start..end).contains(&number),
-            From::RangeOpen(start) => (start..).contains(&number),
-            From::RangeTo(end) => (..end).contains(&number),
-            From::RangeToInclusive(end) => (..=end).contains(&number),
+            Pat::Full => true,
+            Pat::Regex(ref re) => c.books.iter().any(|b| re.is_match(&b.name)),
+            Pat::Single(n) => n == c.number,
+            Pat::RangeInclusive(start, end) => (start..=end).contains(&c.number),
+            Pat::Range(start, end) => (start..end).contains(&c.number),
+            Pat::RangeOpen(start) => (start..).contains(&c.number),
+            Pat::RangeTo(end) => (..end).contains(&c.number),
+            Pat::RangeToInclusive(end) => (..=end).contains(&c.number),
+        }
+    }
+
+    /// Returns true if the book number matches the predicate.
+    fn matches(&self, name: &str, number: u32) -> bool {
+        match *self {
+            Pat::Full => true,
+            Pat::Regex(ref re) => re.is_match(name),
+            Pat::Single(n) => n == number,
+            Pat::RangeInclusive(start, end) => (start..=end).contains(&number),
+            Pat::Range(start, end) => (start..end).contains(&number),
+            Pat::RangeOpen(start) => (start..).contains(&number),
+            Pat::RangeTo(end) => (..end).contains(&number),
+            Pat::RangeToInclusive(end) => (..=end).contains(&number),
         }
     }
 }
 
-impl FromStr for From {
+impl FromStr for Pat {
     type Err = anyhow::Error;
 
     #[inline]
@@ -241,12 +256,12 @@ impl FromStr for From {
 
             if from.is_empty() {
                 let to = to.trim().parse()?;
-                return Ok(From::RangeToInclusive(to));
+                return Ok(Pat::RangeToInclusive(to));
             }
 
             let from = from.parse()?;
             let to = to.trim().parse()?;
-            return Ok(From::RangeInclusive(from, to));
+            return Ok(Pat::RangeInclusive(from, to));
         };
 
         if let Some((from, to)) = s.split_once("..") {
@@ -255,30 +270,35 @@ impl FromStr for From {
 
             if from.is_empty() {
                 if to.is_empty() {
-                    return Ok(From::Full);
+                    return Ok(Pat::Full);
                 }
 
                 let to = to.parse()?;
-                return Ok(From::RangeTo(to));
+                return Ok(Pat::RangeTo(to));
             }
 
             let from = from.parse()?;
 
             if to.is_empty() {
-                return Ok(From::RangeOpen(from));
+                return Ok(Pat::RangeOpen(from));
             }
 
             let to = to.parse()?;
-            return Ok(From::Range(from, to));
+            return Ok(Pat::Range(from, to));
         };
 
-        Ok(From::Single(s.trim().parse()?))
+        if let Ok(n) = s.parse::<u32>() {
+            return Ok(Pat::Single(n));
+        }
+
+        let regex = Regex::new(s)?;
+        Ok(Pat::Regex(regex))
     }
 }
 
 struct Match {
     /// The predicate only applies to the specified book number.
-    from: From,
+    from: Pat,
     /// The target to pick if the predicate matches.
     to: To,
 }
@@ -310,7 +330,7 @@ impl Picker {
     /// Returns the index of the book to pick, or None if no predicate matched.
     fn pick(&self, catalog: &Catalog) -> Option<usize> {
         for m in &self.matches {
-            if m.from.matches(catalog.number)
+            if m.from.matches_catalog(catalog)
                 && let Some(index) = m.to.pick(&catalog.books)
             {
                 return Some(index);
@@ -357,18 +377,12 @@ pub fn entry(opts: &Bookvert) -> Result<()> {
     let mut error: ColorSpec = ColorSpec::new();
     error.set_fg(Some(termcolor::Color::Red));
 
-    let mut skip = Vec::<Regex>::new();
     let mut picker = Picker::default();
 
     for pat in &opts.pick {
         picker
             .parse(pat)
             .with_context(|| anyhow!("Parsing pick predicate '{}'", pat))?;
-    }
-
-    for pat in &opts.skip {
-        let re = Regex::new(pat).with_context(|| anyhow!("Parsing regex '{}'", pat))?;
-        skip.push(re);
     }
 
     let mut files = Vec::new();
@@ -421,10 +435,6 @@ pub fn entry(opts: &Bookvert) -> Result<()> {
             continue;
         };
 
-        if skip.iter().any(|re| re.is_match(name)) {
-            continue;
-        }
-
         let book = books_by_path.entry(dir).or_insert_with(|| Book {
             dir: dir.to_path_buf(),
             name: name.to_string(),
@@ -455,11 +465,28 @@ pub fn entry(opts: &Bookvert) -> Result<()> {
     }
 
     if !opts.include.is_empty() {
-        by_number.retain(|number, _| {
-            opts.include
-                .iter()
-                .any(|predicate| predicate.matches(*number))
-        });
+        for (&number, books) in by_number.iter_mut() {
+            books.retain(|book| {
+                opts.include
+                    .iter()
+                    .any(|predicate| predicate.matches(&book.name, number))
+            });
+        }
+
+        by_number.retain(|_, books| !books.is_empty());
+    }
+
+    if !opts.exclude.is_empty() {
+        for (&number, books) in by_number.iter_mut() {
+            books.retain(|book| {
+                !opts
+                    .exclude
+                    .iter()
+                    .any(|predicate| predicate.matches(&book.name, number))
+            });
+        }
+
+        by_number.retain(|_, books| !books.is_empty());
     }
 
     for (number, books) in by_number {

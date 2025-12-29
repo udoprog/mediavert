@@ -5,9 +5,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
+use archive::Archive;
 use relative_path::{Component, RelativePath, RelativePathBuf};
 
-use crate::archive::Archive;
 use crate::bitrates::Bitrates;
 use crate::condition::Condition;
 use crate::format::Format;

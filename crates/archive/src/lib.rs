@@ -1,4 +1,5 @@
 mod _7z;
+mod error;
 mod rar;
 mod zip;
 
@@ -7,13 +8,14 @@ use core::str::FromStr;
 
 use std::path::Path;
 
-use anyhow::Result;
 use relative_path::RelativePath;
 
-pub(crate) struct ArchiveErr;
+pub use self::error::{ArchiveErr, Error};
+
+type Result<T, E = Error> = core::result::Result<T, E>;
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) enum Archive {
+pub enum Archive {
     Zip,
     Rar,
     _7z,
@@ -21,7 +23,7 @@ pub(crate) enum Archive {
 
 impl Archive {
     #[inline]
-    pub(crate) fn from_ext(ext: &str) -> Option<Self> {
+    pub fn from_ext(ext: &str) -> Option<Self> {
         match ext {
             "zip" => Some(Archive::Zip),
             "rar" => Some(Archive::Rar),
@@ -33,7 +35,7 @@ impl Archive {
 
 impl Archive {
     /// Enumerate an archive of the current type.
-    pub(crate) fn enumerate(
+    pub fn enumerate(
         &self,
         path: &Path,
         sources: &mut dyn FnMut(&RelativePath) -> Result<()>,
@@ -46,11 +48,7 @@ impl Archive {
     }
 
     /// Extract the contents of a file inside the archive.
-    pub(crate) fn contents(
-        &self,
-        archive_path: &Path,
-        path: &RelativePath,
-    ) -> Result<Option<Vec<u8>>> {
+    pub fn contents(&self, archive_path: &Path, path: &RelativePath) -> Result<Option<Vec<u8>>> {
         match self {
             Archive::Rar => self::rar::contents(archive_path, path),
             Archive::Zip => self::zip::contents(archive_path, path),
@@ -74,7 +72,7 @@ impl FromStr for Archive {
     type Err = ArchiveErr;
 
     #[inline]
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
+    fn from_str(s: &str) -> Result<Self, ArchiveErr> {
         match s {
             "zip" => Ok(Archive::Zip),
             "rar" => Ok(Archive::Rar),

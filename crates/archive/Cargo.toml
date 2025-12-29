@@ -1,0 +1,10 @@
+[package]
+name = "archive"
+edition = "2024"
+publish = false
+
+[dependencies]
+unrar = "0.5.8"
+zip = "6.0.0"
+sevenz-rust2 = "0.20.0"
+relative-path = "2.0.1"

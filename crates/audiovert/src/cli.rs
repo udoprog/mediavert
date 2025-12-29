@@ -214,7 +214,6 @@ pub fn entry(opts: &Audiovert) -> Result<()> {
 
 fn run(o: &mut Out<'_>, config: &Config) -> Result<()> {
     let mut tasks = Tasks::new();
-
     config.populate(&mut tasks)?;
 
     for Unsupported { source, ext } in tasks.unsupported.drain(..) {

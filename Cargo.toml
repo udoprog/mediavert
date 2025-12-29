@@ -4,6 +4,7 @@ members = ["crates/*"]
 default-members = ["crates/mediavert"]
 
 [workspace.dependencies]
+archive = { path = "crates/archive" }
 anyhow = "1.0.100"
 clap = { version = "4.5.53", features = ["derive", "unicode", "wrap_help"] }
 ignore = "0.4.25"

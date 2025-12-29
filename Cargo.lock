@@ -100,19 +100,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "archive"
+version = "0.0.0"
+dependencies = [
+ "relative-path",
+ "sevenz-rust2",
+ "unrar",
+ "zip",
+]
+
+[[package]]
 name = "audiovert"
 version = "0.0.8"
 dependencies = [
  "anyhow",
+ "archive",
  "clap",
  "ignore",
  "jiff",
  "lofty",
  "relative-path",
- "sevenz-rust2",
  "termcolor",
- "unrar",
- "zip",
 ]
 
 [[package]]

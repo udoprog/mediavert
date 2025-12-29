@@ -2,18 +2,21 @@ use std::fs::File;
 use std::io;
 use std::path::Path;
 
-use anyhow::{Context, Result};
 use relative_path::RelativePath;
 use sevenz_rust2::{Archive, BlockDecoder, Password};
+
+use crate::error::{Error, Kind};
+
+type Result<T> = core::result::Result<T, Error>;
 
 pub(super) fn enumerate(
     archive_path: &Path,
     sources: &mut dyn FnMut(&RelativePath) -> Result<()>,
 ) -> Result<()> {
-    let mut file = File::open(archive_path)?;
+    let mut file = File::open(archive_path).map_err(Kind::Open)?;
     let password = sevenz_rust2::Password::empty();
 
-    let archive = Archive::read(&mut file, &password).context("opening archive")?;
+    let archive = Archive::read(&mut file, &password).map_err(Kind::SevenZipRead)?;
 
     let block_count = archive.blocks.len();
 
@@ -29,10 +32,10 @@ pub(super) fn enumerate(
 }
 
 pub(super) fn contents(archive_path: &Path, path: &RelativePath) -> Result<Option<Vec<u8>>> {
-    let mut file = File::open(archive_path)?;
+    let mut file = File::open(archive_path).map_err(Kind::Open)?;
     let password = Password::empty();
 
-    let archive = Archive::read(&mut file, &password).context("opening archive")?;
+    let archive = Archive::read(&mut file, &password).map_err(Kind::SevenZipRead)?;
 
     let block_count = archive.blocks.len();
 
@@ -47,7 +50,7 @@ pub(super) fn contents(archive_path: &Path, path: &RelativePath) -> Result<Optio
 
         let mut contents = Vec::new();
 
-        dec.for_each_entries(&mut |entry, reader| {
+        let result = dec.for_each_entries(&mut |entry, reader| {
             if entry.name() == path {
                 io::copy(reader, &mut contents)?;
                 Ok(false)
@@ -55,7 +58,11 @@ pub(super) fn contents(archive_path: &Path, path: &RelativePath) -> Result<Optio
                 io::copy(reader, &mut io::sink())?;
                 Ok(true)
             }
-        })?;
+        });
+
+        if let Err(e) = result {
+            return Err(Error::new(Kind::SevenZipRead(e)));
+        }
 
         return Ok(Some(contents));
     }
