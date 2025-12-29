@@ -1,4 +1,5 @@
 mod _7z;
+mod entry;
 mod error;
 mod rar;
 mod zip;
@@ -10,6 +11,7 @@ use std::path::Path;
 
 use relative_path::RelativePath;
 
+pub use self::entry::{Entry, ReaderEntry};
 pub use self::error::{ArchiveErr, Error};
 
 type Result<T, E = Error> = core::result::Result<T, E>;
@@ -60,6 +62,19 @@ impl Archive {
             Archive::Rar => self::rar::contents(archive_path, path),
             Archive::Zip => self::zip::contents(archive_path, path),
             Archive::_7z => self::_7z::contents(archive_path, path),
+        }
+    }
+
+    /// Extract the contents of a file inside the archive.
+    pub fn read(
+        &self,
+        archive_path: &Path,
+        reader: &mut dyn FnMut(&mut dyn Entry) -> Result<()>,
+    ) -> Result<()> {
+        match self {
+            Archive::Rar => self::rar::read(archive_path, reader),
+            Archive::Zip => self::zip::read(archive_path, reader),
+            Archive::_7z => self::_7z::read(archive_path, reader),
         }
     }
 }

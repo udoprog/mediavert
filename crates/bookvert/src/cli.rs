@@ -736,10 +736,52 @@ pub fn entry(opts: &Bookvert) -> Result<()> {
         w.start_file("ComicInfo.xml", options)?;
         w.write_all(comic_info.as_bytes())?;
 
-        for page in book.pages.iter() {
-            let content = book.contents(&page.path).context("reading page")?;
-            w.start_file(&page.name, options)?;
-            w.write_all(&content)?;
+        let mut pages_by_path = book
+            .pages
+            .iter()
+            .map(|p| (p.path.as_relative_path(), p))
+            .collect::<BTreeMap<_, _>>();
+
+        let mut err = None::<anyhow::Error>;
+        let mut contents = Vec::new();
+
+        book.read(&mut |e| {
+            let Some(path) = e.path() else {
+                return Ok(());
+            };
+
+            let Some(page) = pages_by_path.remove(path) else {
+                return Ok(());
+            };
+
+            contents.clear();
+            e.read_to_end(&mut contents)?;
+
+            if let Err(e) = w.start_file(&page.name, options) {
+                err = Some(e.into());
+                return Ok(());
+            }
+
+            if let Err(e) = w.write_all(&contents) {
+                err = Some(e.into());
+                return Ok(());
+            }
+
+            Ok(())
+        })?;
+
+        if let Some(e) = err {
+            return Err(e).context("Error while reading book pages");
+        }
+
+        let mut error = false;
+
+        for (_, page) in pages_by_path {
+            o.set_color(&err_col)?;
+            write!(o, "  [missing] ")?;
+            o.reset()?;
+            writeln!(o, "{}", page.path)?;
+            error = true;
         }
 
         let out = w.finish()?.into_inner();
@@ -754,9 +796,15 @@ pub fn entry(opts: &Bookvert) -> Result<()> {
             o.reset()?;
         }
 
-        writeln!(o, "{} ({} bytes)", target.display(), out.len())?;
+        writeln!(
+            o,
+            "{} ({} pages, {} bytes)",
+            target.display(),
+            book.pages.len(),
+            out.len()
+        )?;
 
-        if opts.dry_run {
+        if opts.dry_run || error {
             continue;
         }
 

@@ -399,8 +399,9 @@ impl NameView {
                         self.editing = true;
                     }
                 } else if let Some(name) = state.names.iter().nth(self.index.saturating_sub(1)) {
-                    state.name = Some(name.clone());
-                    return ViewEvent::PopView;
+                    self.editing = true;
+                    self.index = 0;
+                    self.input = Input::new(name.clone());
                 }
             }
             _ if editing => {
@@ -418,7 +419,7 @@ impl NameView {
         let header = Line::from(vec![
             Span::styled("Set Name", STYLES.header_style()),
             Span::styled(
-                " (Enter to select, Esc/q/← to go back)",
+                " (enter/o to select, esc/q/← to go back)",
                 STYLES.header_hint_style(),
             ),
         ]);

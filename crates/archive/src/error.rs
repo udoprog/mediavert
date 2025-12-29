@@ -40,6 +40,7 @@ impl core::error::Error for Error {
             Kind::UnrarReadHeader(e) => Some(e),
             Kind::UnrarReadContents(e) => Some(e),
             Kind::UnrarSkip(e) => Some(e),
+            Kind::MissingArchive => None,
         }
     }
 }
@@ -77,6 +78,7 @@ pub(super) enum Kind {
     UnrarReadHeader(unrar::error::UnrarError),
     UnrarReadContents(unrar::error::UnrarError),
     UnrarSkip(unrar::error::UnrarError),
+    MissingArchive,
 }
 
 impl fmt::Display for Kind {
@@ -95,6 +97,7 @@ impl fmt::Display for Kind {
             Kind::UnrarReadHeader(..) => write!(f, "failed to read rar archive header"),
             Kind::UnrarReadContents(..) => write!(f, "failed to read rar archive contents"),
             Kind::UnrarSkip(..) => write!(f, "failed to skip rar archive entry"),
+            Kind::MissingArchive => write!(f, "missing archive during processing"),
         }
     }
 }

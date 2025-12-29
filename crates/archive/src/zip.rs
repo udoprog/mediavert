@@ -4,9 +4,10 @@ use std::path::Path;
 
 use relative_path::RelativePath;
 use zip::ZipArchive;
+use zip::read::ZipFile;
 
-use crate::ArchiveMetadata;
 use crate::error::{Error, Kind};
+use crate::{ArchiveMetadata, Entry};
 
 type Result<T> = core::result::Result<T, Error>;
 
@@ -46,4 +47,36 @@ pub(super) fn contents(archive_path: &Path, path: &RelativePath) -> Result<Optio
     }
 
     Ok(None)
+}
+
+pub(super) fn read(
+    archive_path: &Path,
+    reader: &mut dyn FnMut(&mut dyn Entry) -> Result<()>,
+) -> Result<()> {
+    struct ZipEntry<'a> {
+        file: ZipFile<'a, File>,
+    }
+
+    impl Entry for ZipEntry<'_> {
+        fn path(&self) -> Option<&RelativePath> {
+            Some(RelativePath::new(self.file.name()))
+        }
+
+        fn read_to_end(&mut self, out: &mut Vec<u8>) -> Result<()> {
+            out.reserve(self.file.size() as usize);
+            self.file.read_to_end(out).map_err(Kind::ReadContents)?;
+            Ok(())
+        }
+    }
+
+    let file = File::open(archive_path).map_err(Kind::Open)?;
+    let mut archive = ZipArchive::new(file).map_err(Kind::ZipOpen)?;
+
+    for i in 0..archive.len() {
+        let file = archive.by_index(i).map_err(|e| Kind::ZipByIndex(e, i))?;
+        let mut entry = ZipEntry { file };
+        reader(&mut entry)?;
+    }
+
+    Ok(())
 }

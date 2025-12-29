@@ -1,11 +1,11 @@
 use std::collections::BTreeSet;
-use std::fs;
+use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use anyhow::{Context, Result};
-use archive::Archive;
-use relative_path::{RelativePath, RelativePathBuf};
+use archive::{Archive, Entry, ReaderEntry};
+use relative_path::RelativePathBuf;
 
 /// The state of a bookvert session.
 #[derive(Default)]
@@ -99,22 +99,28 @@ impl Book {
     }
 
     /// Get the raw contents of a page.
-    pub fn contents(&self, path: &RelativePath) -> Result<Vec<u8>> {
+    pub fn read(
+        &self,
+        r: &mut dyn FnMut(&mut dyn Entry) -> Result<(), archive::Error>,
+    ) -> Result<()> {
         match &self.source.kind {
             BookSourceType::Directory => {
-                let path = path.to_path(&self.source.path);
+                for page in &self.pages {
+                    let path = page.path.to_path(&self.source.path);
 
-                match fs::read(&path) {
-                    Ok(data) => Ok(data),
-                    Err(e) => Err(e).context(path.display().to_string()),
+                    let file = File::open(&path).with_context(|| path.display().to_string())?;
+
+                    let mut entry = ReaderEntry::new(&page.path, file);
+
+                    if let Err(e) = r(&mut entry) {
+                        return Err(e).context(self.source.path.display().to_string());
+                    }
                 }
+
+                Ok(())
             }
-            BookSourceType::Archive(archive) => match archive.contents(&self.source.path, path) {
-                Ok(Some(data)) => Ok(data),
-                Ok(None) => Err(anyhow::anyhow!(
-                    "file not found in archive: {}",
-                    self.source.path.display()
-                )),
+            BookSourceType::Archive(archive) => match archive.read(&self.source.path, r) {
+                Ok(()) => Ok(()),
                 Err(e) => Err(e).context(self.source.path.display().to_string()),
             },
         }
