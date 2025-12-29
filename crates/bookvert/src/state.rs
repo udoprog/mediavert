@@ -1,7 +1,11 @@
 use std::collections::BTreeSet;
-use std::fs::Metadata;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+
+use anyhow::{Context, Result};
+use archive::Archive;
+use relative_path::{RelativePath, RelativePathBuf};
 
 /// The state of a bookvert session.
 #[derive(Default)]
@@ -41,20 +45,38 @@ impl Catalog {
     }
 }
 
+/// Metadata about a page.
+pub struct PageMetadata {
+    /// The size in bytes of a page.
+    pub size: u64,
+}
+
 /// Data about a page.
 pub struct Page {
     /// The filesystem name of the page.
-    pub path: PathBuf,
+    pub path: RelativePathBuf,
     /// The name of the page.
     pub name: String,
     /// The filesystem metadata of the page.
-    pub metadata: Metadata,
+    pub metadata: PageMetadata,
+}
+
+/// The source of a book.
+pub struct BookSource {
+    pub path: PathBuf,
+    pub kind: BookSourceType,
+}
+
+/// The type of source for a book.
+pub enum BookSourceType {
+    Directory,
+    Archive(Archive),
 }
 
 /// Data about a book.
 pub struct Book {
     /// The directory where the book is located.
-    pub dir: PathBuf,
+    pub source: BookSource,
     /// The name of the book.
     pub name: String,
     /// The pages in the book.
@@ -67,12 +89,34 @@ impl Book {
     /// Returns a key for sorting books by name and directory.
     #[inline]
     pub fn key(&self) -> (&str, &Path) {
-        (&self.name, &self.dir)
+        (&self.name, &self.source.path)
     }
 
     /// Returns the total size of all pages in bytes.
     #[inline]
     pub fn bytes(&self) -> u64 {
-        self.pages.iter().map(|page| page.metadata.len()).sum()
+        self.pages.iter().map(|page| page.metadata.size).sum()
+    }
+
+    /// Get the raw contents of a page.
+    pub fn contents(&self, path: &RelativePath) -> Result<Vec<u8>> {
+        match &self.source.kind {
+            BookSourceType::Directory => {
+                let path = path.to_path(&self.source.path);
+
+                match fs::read(&path) {
+                    Ok(data) => Ok(data),
+                    Err(e) => Err(e).context(path.display().to_string()),
+                }
+            }
+            BookSourceType::Archive(archive) => match archive.contents(&self.source.path, path) {
+                Ok(Some(data)) => Ok(data),
+                Ok(None) => Err(anyhow::anyhow!(
+                    "file not found in archive: {}",
+                    self.source.path.display()
+                )),
+                Err(e) => Err(e).context(self.source.path.display().to_string()),
+            },
+        }
     }
 }

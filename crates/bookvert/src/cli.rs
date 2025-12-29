@@ -6,18 +6,21 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::{Cursor, Write as _};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::rc::Rc;
 
 use anyhow::{Context, Result, anyhow};
+use archive::Archive;
 use clap::Parser;
 use ignore::Walk;
 use language_tags::LanguageTag;
 use regex::Regex;
+use relative_path::RelativePathBuf;
 use termcolor::{ColorSpec, StandardStream, WriteColor};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipWriter};
 
+use crate::state::{BookSource, BookSourceType, PageMetadata};
 use crate::{App, Book, Catalog, Page, State};
 
 /// A tool to perform batch conversion of books.
@@ -32,17 +35,22 @@ pub struct Bookvert {
     name: Option<String>,
     /// When there are more than one book, specify a predicate for how to pick.
     ///
-    /// Format: `[from=]to` where `from` is an book number or range to match.
+    /// Format: [from=]to where from is an book number or range to match.
     ///
-    /// The range in `from` is specified as `n..m` (exclusive), `n..=m` (inclusive), or `n..` (open-ended) or `..` (all).
-    /// The `to` target can be `first`, `last`, `most-pages`, a zero-based index, or a regular expression for the exact match to pick.
+    /// The range in from is specified as n..m (exclusive), n..=m (inclusive),
+    /// or n.. (open-ended) or .. (all). The to target can be first, last,
+    /// most-pages, a zero-based index, or a regular expression for the exact
+    /// match to pick.
     ///
     /// Examples:
-    /// - `-p most-pages` picks the match with the most pages for all books.
-    /// - `-p 3=first` picks the first match for book number 3.
-    /// - `-p 3=1` picks the second match for book number 3.
-    /// - `-p 1..=5=most-pages` picks the match with the most pages for books 1 through 5.
-    /// - `-p fix' will match *any* book that contains the string `fix`.
+    /// - -p most-pages picks the match with the most pages for all books.
+    /// - -p 3=first picks the first match for book number 3.
+    /// - -p 3=1 picks the second match for book number 3.
+    /// - -p 1..=5=most-pages picks the match with the most pages for books 1
+    ///   through 5.
+    /// - -p fix' will match *any* book that contains the string fix.
+    /// - -p /pattern/[=to] will match any book with a title matching the regex
+    ///   pattern.
     #[arg(long, short = 'p', verbatim_doc_comment)]
     pick: Vec<String>,
     /// Overwrite existing files.
@@ -50,19 +58,29 @@ pub struct Bookvert {
     force: bool,
     /// Non-interactive mode: errors out if a choice is required.
     #[arg(long, short = 'n')]
-    noninteractive: bool,
+    non_interactive: bool,
     /// Verbose output.
     #[arg(long, short = 'v')]
     verbose: bool,
     /// Perform a trial run with no changes made.
     #[arg(long)]
     dry_run: bool,
-    /// Specify a regular expression for a name or volume patern to skip.
+    /// Only include books matching the given pattern.
+    ///
+    /// If no include is specified, all found books are matched.
+    ///
+    /// A pattern might match a single book number, a range of book numbers
+    /// (1..10, ..=10, ..), a regular expression (/pattern/), or full to match
+    /// all books, anything else is assumed to be a pattern.
+    #[arg(long, short = 'i')]
+    include: Vec<Pat>,
+    /// Exclude found books matching the given pattern.
+    ///
+    /// A pattern might match a single book number, a range of book numbers
+    /// (1..10, ..=10, ..), a regular expression (/pattern/), or full to match
+    /// all books, anything else is assumed to be a pattern.
     #[arg(long, short = 'e')]
     exclude: Vec<Pat>,
-    /// Only include series numbers matching these predicates.
-    #[arg(long)]
-    include: Vec<Pat>,
     /// Series for ComicInfo.xml metadata.
     #[arg(long)]
     series: Option<String>,
@@ -251,6 +269,13 @@ impl FromStr for Pat {
     fn from_str(s: &str) -> Result<Self> {
         let s = s.trim();
 
+        if let Some(s) = s.strip_prefix('/')
+            && let Some(s) = s.strip_suffix('/')
+        {
+            let regex = Regex::new(s)?;
+            return Ok(Pat::Regex(regex));
+        }
+
         if let Some((from, to)) = s.split_once("..=") {
             let from = from.trim();
 
@@ -368,14 +393,14 @@ fn translate(input: &str) -> &str {
 }
 
 pub fn entry(opts: &Bookvert) -> Result<()> {
-    let mut warn: ColorSpec = ColorSpec::new();
-    warn.set_fg(Some(termcolor::Color::Yellow));
+    let mut warn_col: ColorSpec = ColorSpec::new();
+    warn_col.set_fg(Some(termcolor::Color::Yellow));
 
-    let mut ok: ColorSpec = ColorSpec::new();
-    ok.set_fg(Some(termcolor::Color::Green));
+    let mut ok_col: ColorSpec = ColorSpec::new();
+    ok_col.set_fg(Some(termcolor::Color::Green));
 
-    let mut error: ColorSpec = ColorSpec::new();
-    error.set_fg(Some(termcolor::Color::Red));
+    let mut err_col: ColorSpec = ColorSpec::new();
+    err_col.set_fg(Some(termcolor::Color::Red));
 
     let mut picker = Picker::default();
 
@@ -385,7 +410,8 @@ pub fn entry(opts: &Bookvert) -> Result<()> {
             .with_context(|| anyhow!("Parsing pick predicate '{}'", pat))?;
     }
 
-    let mut files = Vec::new();
+    let mut unsorted_files = Vec::new();
+    let mut archives = Vec::new();
 
     for path in &opts.path {
         for p in Walk::new(path) {
@@ -395,38 +421,48 @@ pub fn entry(opts: &Bookvert) -> Result<()> {
                 continue;
             };
 
-            if ty.is_file() {
-                let path = entry.into_path();
-
-                let ext = path
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .map(translate)
-                    .map(|e| e.to_lowercase());
-
-                let Some(ext) = ext else {
-                    continue;
-                };
-
-                if !matches!(ext.as_str(), ext!()) {
-                    continue;
-                }
-
-                files.push((path, ext));
+            if !ty.is_file() {
+                continue;
             }
+
+            let path = entry.into_path();
+
+            if let Some(archive) = path
+                .extension()
+                .and_then(|e| Archive::from_ext(e.to_str()?))
+            {
+                archives.push((path, archive));
+                continue;
+            }
+
+            let ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(translate)
+                .map(|e| e.to_lowercase());
+
+            let Some(ext) = ext else {
+                continue;
+            };
+
+            if !matches!(ext.as_str(), ext!()) {
+                continue;
+            }
+
+            unsorted_files.push((path, ext));
         }
     }
 
-    files.sort();
+    unsorted_files.sort();
 
     let o = StandardStream::stdout(termcolor::ColorChoice::Auto);
     let mut o = o.lock();
 
-    let mut books_by_path = BTreeMap::<&Path, _>::new();
+    let mut books_by_path = BTreeMap::<PathBuf, _>::new();
     let mut by_number = BTreeMap::<_, Vec<_>>::new();
     let mut state = State::default();
 
-    for (from, ext) in &files {
+    for (from, ext) in &unsorted_files {
         let Some(dir) = from.parent() else {
             continue;
         };
@@ -435,19 +471,86 @@ pub fn entry(opts: &Bookvert) -> Result<()> {
             continue;
         };
 
-        let book = books_by_path.entry(dir).or_insert_with(|| Book {
-            dir: dir.to_path_buf(),
+        let Ok(suffix) = from.strip_prefix(dir) else {
+            continue;
+        };
+
+        let Ok(path) = RelativePathBuf::from_path(suffix) else {
+            continue;
+        };
+
+        let book = books_by_path.entry(dir.to_owned()).or_insert_with(|| Book {
+            source: BookSource {
+                path: dir.to_owned(),
+                kind: BookSourceType::Directory,
+            },
             name: name.to_string(),
             pages: Vec::new(),
             numbers: numbers(name).collect(),
         });
 
+        let metadata = match fs::metadata(from) {
+            Ok(m) => PageMetadata { size: m.len() },
+            Err(e) => return Err(e).context(from.display().to_string()),
+        };
+
         book.pages.push(Page {
-            path: from.to_owned(),
+            path,
             name: format!("p{:03}.{ext}", book.pages.len()),
-            metadata: fs::metadata(from)
-                .with_context(|| anyhow!("{}: Failed to get metadata", from.display()))?,
+            metadata,
         });
+    }
+
+    for (from, archive) in archives {
+        let Some(name) = from.file_stem().and_then(|n| n.to_str()) else {
+            continue;
+        };
+
+        let mut book = Book {
+            source: BookSource {
+                path: from.to_owned(),
+                kind: BookSourceType::Archive(archive),
+            },
+            name: name.to_string(),
+            pages: Vec::new(),
+            numbers: numbers(name).collect(),
+        };
+
+        let mut pages = Vec::new();
+
+        let result = archive.enumerate(&from, &mut |path, m| {
+            if matches!(path.extension(), Some(ext!())) {
+                pages.push((path.to_owned(), m));
+            }
+
+            Ok(())
+        });
+
+        if let Err(error) = result {
+            o.set_color(&err_col)?;
+            write!(o, "[error] ")?;
+            o.reset()?;
+            writeln!(o, "{error}")?;
+            continue;
+        }
+
+        pages.sort_by(|a, b| a.0.cmp(&b.0));
+
+        for (path, m) in pages {
+            let Some(ext) = path.extension() else {
+                continue;
+            };
+
+            let name = format!("p{:03}.{ext}", book.pages.len());
+
+            book.pages.push(Page {
+                path,
+                name,
+                metadata: PageMetadata { size: m.size },
+            });
+        }
+
+        books_by_path.insert(from.to_owned(), book);
     }
 
     for (_, book) in books_by_path {
@@ -522,11 +625,11 @@ pub fn entry(opts: &Bookvert) -> Result<()> {
         }
     }
 
-    if opts.noninteractive {
+    if opts.non_interactive {
         let mut is_error = false;
 
         if state.name.is_none() {
-            o.set_color(&error)?;
+            o.set_color(&err_col)?;
             write!(o, "[error] ")?;
             o.reset()?;
 
@@ -544,7 +647,7 @@ pub fn entry(opts: &Bookvert) -> Result<()> {
                 continue;
             }
 
-            o.set_color(&error)?;
+            o.set_color(&err_col)?;
             write!(o, "[error] ")?;
             o.reset()?;
 
@@ -564,10 +667,10 @@ pub fn entry(opts: &Bookvert) -> Result<()> {
                 )?;
 
                 if opts.verbose {
-                    o.set_color(&warn)?;
+                    o.set_color(&warn_col)?;
                     write!(o, "    [source]")?;
                     o.reset()?;
-                    writeln!(o, " {}", book.dir.display())?;
+                    writeln!(o, " {}", book.source.path.display())?;
                 }
             }
 
@@ -593,20 +696,20 @@ pub fn entry(opts: &Bookvert) -> Result<()> {
         };
 
         let mut target = opts.out.clone();
-        target.push(format!("{name}{:03}", c.number));
+        target.push(format!("{name} {:03}", c.number));
         target.add_extension("cbz");
 
-        let color = if opts.dry_run { &warn } else { &ok };
+        let color = if opts.dry_run { &warn_col } else { &ok_col };
         o.set_color(color)?;
         write!(o, "[from]")?;
         o.reset()?;
 
-        writeln!(o, " {:03}: {}", c.number, book.dir.display())?;
+        writeln!(o, " {:03}: {}", c.number, book.source.path.display())?;
 
         let comic_info = config_info(opts, &name, c, book).context("ComicInfo.xml generation")?;
 
         if opts.verbose {
-            o.set_color(&ok)?;
+            o.set_color(&ok_col)?;
             write!(o, "  [info] ")?;
             o.reset()?;
             writeln!(o, "ComicInfo.xml:")?;
@@ -617,7 +720,7 @@ pub fn entry(opts: &Bookvert) -> Result<()> {
         }
 
         if target.exists() && !opts.force {
-            o.set_color(&warn)?;
+            o.set_color(&warn_col)?;
             write!(o, "  [exists] ")?;
             o.reset()?;
             writeln!(o, "{} (--force to overwrite)", target.display())?;
@@ -634,9 +737,7 @@ pub fn entry(opts: &Bookvert) -> Result<()> {
         w.write_all(comic_info.as_bytes())?;
 
         for page in book.pages.iter() {
-            let content = fs::read(&page.path)
-                .with_context(|| anyhow!("Failed to read file {}", page.path.display()))?;
-
+            let content = book.contents(&page.path).context("reading page")?;
             w.start_file(&page.name, options)?;
             w.write_all(&content)?;
         }
@@ -644,11 +745,11 @@ pub fn entry(opts: &Bookvert) -> Result<()> {
         let out = w.finish()?.into_inner();
 
         if opts.dry_run {
-            o.set_color(&warn)?;
+            o.set_color(&warn_col)?;
             write!(o, "  [dry-run] ")?;
             o.reset()?;
         } else {
-            o.set_color(&ok)?;
+            o.set_color(&ok_col)?;
             write!(o, "  [file] ")?;
             o.reset()?;
         }
@@ -676,11 +777,17 @@ pub fn entry(opts: &Bookvert) -> Result<()> {
 fn numbers(mut input: &str) -> impl Iterator<Item = u32> {
     iter::from_fn(move || {
         loop {
-            let n = input.find(char::is_numeric)?;
+            let n = input.find(char::is_alphanumeric)?;
             input = input.get(n..)?;
-            let end = input.find(|c: char| !c.is_numeric()).unwrap_or(input.len());
+
+            let end = input
+                .find(|c: char| !c.is_alphanumeric())
+                .unwrap_or(input.len());
+
             let head;
             (head, input) = input.split_at_checked(end)?;
+
+            let head = head.trim_start_matches(|c: char| !c.is_numeric());
 
             if let Ok(number) = head.parse() {
                 return Some(number);

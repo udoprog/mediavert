@@ -17,8 +17,10 @@ anyhow.workspace = true
 clap.workspace = true
 ignore.workspace = true
 termcolor.workspace = true
+archive.workspace = true
 language-tags = "0.3.2"
-ratatui = { version = "0.29.0", default-features = false, features = ["crossterm"] }
+ratatui = { version = "0.30.0", default-features = false, features = ["crossterm"] }
+tui-input = "0.15.0"
 regex = "1.12.2"
-tui-input = "0.14.0"
-zip = "6.0.0"
+zip = "7.0.0"
+relative-path = "2.0.1"

@@ -1,4 +1,4 @@
-use ratatui::style::{Color, Modifier, Style, Stylize};
+use ratatui::style::{Color, Modifier, Style};
 
 /// Centralized styling configuration for the TUI.
 pub(crate) struct Styles {

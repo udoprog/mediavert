@@ -14,6 +14,13 @@ pub use self::error::{ArchiveErr, Error};
 
 type Result<T, E = Error> = core::result::Result<T, E>;
 
+/// Metadata about an entry in an archive.
+pub struct ArchiveMetadata {
+    /// The size in bytes of an entry in the archive.
+    pub size: u64,
+}
+
+/// The type of an archive.
 #[derive(Debug, Clone, Copy)]
 pub enum Archive {
     Zip,
@@ -25,7 +32,7 @@ impl Archive {
     #[inline]
     pub fn from_ext(ext: &str) -> Option<Self> {
         match ext {
-            "zip" => Some(Archive::Zip),
+            "zip" | "cbz" => Some(Archive::Zip),
             "rar" => Some(Archive::Rar),
             "7z" => Some(Archive::_7z),
             _ => None,
@@ -38,7 +45,7 @@ impl Archive {
     pub fn enumerate(
         &self,
         path: &Path,
-        sources: &mut dyn FnMut(&RelativePath) -> Result<()>,
+        sources: &mut dyn FnMut(&RelativePath, ArchiveMetadata) -> Result<()>,
     ) -> Result<()> {
         match self {
             Self::Rar => self::rar::enumerate(path, sources),

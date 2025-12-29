@@ -5,13 +5,14 @@ use std::path::Path;
 use relative_path::RelativePath;
 use sevenz_rust2::{Archive, BlockDecoder, Password};
 
+use crate::ArchiveMetadata;
 use crate::error::{Error, Kind};
 
 type Result<T> = core::result::Result<T, Error>;
 
 pub(super) fn enumerate(
     archive_path: &Path,
-    sources: &mut dyn FnMut(&RelativePath) -> Result<()>,
+    sources: &mut dyn FnMut(&RelativePath, ArchiveMetadata) -> Result<()>,
 ) -> Result<()> {
     let mut file = File::open(archive_path).map_err(Kind::Open)?;
     let password = sevenz_rust2::Password::empty();
@@ -24,7 +25,9 @@ pub(super) fn enumerate(
         let dec = BlockDecoder::new(1, block_index, &archive, &password, &mut file);
 
         for entry in dec.entries() {
-            sources(RelativePath::new(entry.name()))?;
+            let m = ArchiveMetadata { size: entry.size() };
+
+            sources(RelativePath::new(entry.name()), m)?;
         }
     }
 

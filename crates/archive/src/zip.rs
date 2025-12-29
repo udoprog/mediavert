@@ -5,20 +5,24 @@ use std::path::Path;
 use relative_path::RelativePath;
 use zip::ZipArchive;
 
+use crate::ArchiveMetadata;
 use crate::error::{Error, Kind};
 
 type Result<T> = core::result::Result<T, Error>;
 
 pub(super) fn enumerate(
     archive_path: &Path,
-    sources: &mut dyn FnMut(&RelativePath) -> Result<()>,
+    sources: &mut dyn FnMut(&RelativePath, ArchiveMetadata) -> Result<()>,
 ) -> Result<()> {
     let reader = File::open(archive_path).map_err(Kind::Open)?;
     let mut archive = ZipArchive::new(reader).map_err(Kind::ZipOpen)?;
 
     for i in 0..archive.len() {
         let file = archive.by_index(i).map_err(|e| Kind::ZipByIndex(e, i))?;
-        sources(RelativePath::new(file.name()))?;
+
+        let m = ArchiveMetadata { size: file.size() };
+
+        sources(RelativePath::new(file.name()), m)?;
     }
 
     Ok(())

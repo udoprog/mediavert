@@ -1,5 +1,3 @@
-use std::path::Path;
-
 use anyhow::Result;
 use ratatui::Frame;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
@@ -38,7 +36,7 @@ impl Default for CatalogsView {
 
 impl CatalogsView {
     fn update(&mut self, key: KeyEvent, state: &mut State) -> ViewEvent {
-        use KeyCode::{Backspace, Char, Down, Enter, Esc, Right, Up};
+        use KeyCode::{Backspace, Char, Delete, Down, Enter, Esc, Right, Up};
 
         let max_index = state.catalogs.len().saturating_add(1);
 
@@ -78,7 +76,7 @@ impl CatalogsView {
             Char('x') => {
                 return ViewEvent::Finish;
             }
-            Backspace | Char('c') if self.index >= 2 => {
+            Delete | Backspace | Char('c') if self.index >= 2 => {
                 let category = self.index.saturating_sub(2);
 
                 if let Some(c) = state.catalogs.get_mut(category) {
@@ -187,7 +185,7 @@ impl CatalogsView {
         let header = Line::from(vec![
             Span::styled("Catalogs", STYLES.header_style()),
             Span::styled(
-                " (Enter/o/→ to select, Delete/c to clear, Esc/q to quit)",
+                " (enter/o/→ to select, delete/c to clear, esc/q to quit)",
                 STYLES.header_hint_style(),
             ),
         ]);
@@ -285,8 +283,6 @@ impl BooksView {
             let marker = STYLES.selected(is_selected);
             let style = STYLES.normal_item_style(is_selected, is_picked);
 
-            let dir = book.dir.parent().unwrap_or(Path::new("."));
-
             items.push(ListItem::new(Span::styled(
                 format!("{marker} {}", book.name),
                 style,
@@ -301,6 +297,8 @@ impl BooksView {
                 format!("    bytes: {}", book.bytes()),
                 STYLES.dim_style(),
             )));
+
+            let dir = &book.source.path;
 
             items.push(ListItem::new(Span::styled(
                 format!("    from {}", dir.display()),
@@ -317,7 +315,7 @@ impl BooksView {
         let line = Line::from(vec![
             Span::styled(line, STYLES.header_style()),
             Span::styled(
-                " (Enter/o to pick, Esc/q/← to go back, i/I to show paths)",
+                " (enter/o to pick, esc/q/← to go back, i/I to show paths)",
                 STYLES.header_hint_style(),
             ),
         ]);

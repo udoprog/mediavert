@@ -3,13 +3,14 @@ use std::path::Path;
 use relative_path::RelativePath;
 use unrar::Archive;
 
+use crate::ArchiveMetadata;
 use crate::error::{Error, Kind};
 
 type Result<T> = core::result::Result<T, Error>;
 
 pub(super) fn enumerate(
     archive_path: &Path,
-    sources: &mut dyn FnMut(&RelativePath) -> Result<()>,
+    sources: &mut dyn FnMut(&RelativePath, ArchiveMetadata) -> Result<()>,
 ) -> Result<()> {
     let archive = Archive::new(archive_path);
     let open_archive = archive.open_for_listing().map_err(Kind::UnrarOpen)?;
@@ -21,7 +22,11 @@ pub(super) fn enumerate(
             continue;
         };
 
-        sources(RelativePath::new(name))?;
+        let m = ArchiveMetadata {
+            size: e.unpacked_size,
+        };
+
+        sources(RelativePath::new(name), m)?;
     }
 
     Ok(())

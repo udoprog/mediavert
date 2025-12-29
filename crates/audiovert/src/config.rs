@@ -87,7 +87,7 @@ impl Config {
                         archive_path.push(file_name);
                     }
 
-                    kind.enumerate(walked, &mut |path| {
+                    kind.enumerate(walked, &mut |path, _| {
                         let path = RelativePath::new(path);
                         let mut buf = archive_path.clone();
 
