@@ -23,7 +23,7 @@ pub struct ArchiveMetadata {
 }
 
 /// The type of an archive.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Archive {
     Zip,
     Rar,

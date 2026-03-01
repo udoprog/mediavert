@@ -22,5 +22,5 @@ language-tags = "0.3.2"
 ratatui = { version = "0.30.0", default-features = false, features = ["crossterm"] }
 tui-input = "0.15.0"
 regex = "1.12.2"
-zip = "7.0.0"
+zip = "8.1.0"
 relative-path = "2.0.1"

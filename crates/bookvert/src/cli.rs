@@ -3,7 +3,8 @@ use core::iter;
 use core::str::FromStr;
 
 use std::borrow::Cow;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::OsStr;
 use std::fs;
 use std::io::{Cursor, Write as _};
 use std::path::PathBuf;
@@ -22,6 +23,18 @@ use zip::{CompressionMethod, ZipWriter};
 
 use crate::state::{BookSource, BookSourceType, PageMetadata};
 use crate::{App, Book, Catalog, Page, State};
+
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+enum BookLocation {
+    /// A book in a directory.
+    Directory { dir: PathBuf },
+    /// A book inside of an archive.
+    Archive {
+        path: PathBuf,
+        archive: Archive,
+        dir: RelativePathBuf,
+    },
+}
 
 /// A tool to perform batch conversion of books.
 #[derive(Parser)]
@@ -413,8 +426,8 @@ pub fn entry(opts: &Bookvert) -> Result<()> {
     let mut unsorted_files = Vec::new();
     let mut archives = Vec::new();
 
-    for path in &opts.path {
-        for p in Walk::new(path) {
+    for from_path in &opts.path {
+        for p in Walk::new(from_path) {
             let entry = p?;
 
             let Some(ty) = entry.file_type() else {
@@ -449,7 +462,7 @@ pub fn entry(opts: &Bookvert) -> Result<()> {
                 continue;
             }
 
-            unsorted_files.push((path, ext));
+            unsorted_files.push((from_path, path, ext));
         }
     }
 
@@ -458,35 +471,47 @@ pub fn entry(opts: &Bookvert) -> Result<()> {
     let o = StandardStream::stdout(termcolor::ColorChoice::Auto);
     let mut o = o.lock();
 
-    let mut books_by_path = BTreeMap::<PathBuf, _>::new();
+    let mut books = BTreeMap::<BookLocation, _>::new();
     let mut by_number = BTreeMap::<_, Vec<_>>::new();
     let mut state = State::default();
 
-    for (from, ext) in &unsorted_files {
+    for (from_path, from, ext) in &unsorted_files {
         let Some(dir) = from.parent() else {
             continue;
         };
 
-        let Some(name) = dir.file_name().and_then(|n| n.to_str()) else {
+        let Some(dir_name) = dir.file_name().and_then(OsStr::to_str) else {
             continue;
         };
 
-        let Ok(suffix) = from.strip_prefix(dir) else {
+        let Some(path) = from.file_name() else {
             continue;
         };
 
-        let Ok(path) = RelativePathBuf::from_path(suffix) else {
+        let Ok(path) = RelativePathBuf::from_path(path) else {
             continue;
         };
 
-        let book = books_by_path.entry(dir.to_owned()).or_insert_with(|| Book {
+        let Ok(suffix) = dir.strip_prefix(from_path) else {
+            continue;
+        };
+
+        let Ok(suffix) = RelativePathBuf::from_path(suffix) else {
+            continue;
+        };
+
+        let location = BookLocation::Directory {
+            dir: dir.to_owned(),
+        };
+
+        let book = books.entry(location).or_insert_with(|| Book {
             source: BookSource {
                 path: dir.to_owned(),
                 kind: BookSourceType::Directory,
             },
-            name: name.to_string(),
+            name: suffix.to_string(),
             pages: Vec::new(),
-            numbers: numbers(name).collect(),
+            numbers: numbers(dir_name).collect(),
         });
 
         let metadata = match fs::metadata(from) {
@@ -502,18 +527,8 @@ pub fn entry(opts: &Bookvert) -> Result<()> {
     }
 
     for (from, archive) in archives {
-        let Some(name) = from.file_stem().and_then(|n| n.to_str()) else {
+        let Some(from_name) = from.file_stem().and_then(OsStr::to_str) else {
             continue;
-        };
-
-        let mut book = Book {
-            source: BookSource {
-                path: from.to_owned(),
-                kind: BookSourceType::Archive(archive),
-            },
-            name: name.to_string(),
-            pages: Vec::new(),
-            numbers: numbers(name).collect(),
         };
 
         let mut pages = Vec::new();
@@ -536,10 +551,38 @@ pub fn entry(opts: &Bookvert) -> Result<()> {
 
         pages.sort_by(|a, b| a.0.cmp(&b.0));
 
+        let mut books_by_dir = BTreeMap::new();
+
         for (path, m) in pages {
             let Some(ext) = path.extension() else {
                 continue;
             };
+
+            let Some(dir) = path.parent() else {
+                continue;
+            };
+
+            let Some(dir_name) = dir.file_name() else {
+                continue;
+            };
+
+            let mut numbers = self::numbers(dir_name).collect::<BTreeSet<_>>();
+
+            if numbers.is_empty() {
+                for n in self::numbers(from_name) {
+                    numbers.insert(n);
+                }
+            }
+
+            let book = books_by_dir.entry(dir.to_owned()).or_insert_with(|| Book {
+                source: BookSource {
+                    path: from.to_owned(),
+                    kind: BookSourceType::Archive(archive),
+                },
+                name: dir.to_string(),
+                pages: Vec::new(),
+                numbers,
+            });
 
             let name = format!("p{:03}.{ext}", book.pages.len());
 
@@ -550,10 +593,18 @@ pub fn entry(opts: &Bookvert) -> Result<()> {
             });
         }
 
-        books_by_path.insert(from.to_owned(), book);
+        for (dir, book) in books_by_dir {
+            let location = BookLocation::Archive {
+                path: from.to_owned(),
+                archive,
+                dir,
+            };
+
+            books.insert(location, book);
+        }
     }
 
-    for (_, book) in books_by_path {
+    for (_, book) in books {
         let book = Rc::new(book);
 
         state.names.insert(book.name.clone());
