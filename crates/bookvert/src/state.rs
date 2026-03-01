@@ -46,12 +46,14 @@ impl Catalog {
 }
 
 /// Metadata about a page.
+#[derive(Debug)]
 pub struct PageMetadata {
     /// The size in bytes of a page.
     pub size: u64,
 }
 
 /// Data about a page.
+#[derive(Debug)]
 pub struct Page {
     /// The filesystem name of the page.
     pub path: RelativePathBuf,
@@ -62,18 +64,21 @@ pub struct Page {
 }
 
 /// The source of a book.
+#[derive(Debug)]
 pub struct BookSource {
     pub path: PathBuf,
     pub kind: BookSourceType,
 }
 
 /// The type of source for a book.
+#[derive(Debug)]
 pub enum BookSourceType {
     Directory,
     Archive(Archive),
 }
 
 /// Data about a book.
+#[derive(Debug)]
 pub struct Book {
     /// The directory where the book is located.
     pub source: BookSource,

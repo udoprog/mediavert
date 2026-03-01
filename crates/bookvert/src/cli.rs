@@ -835,7 +835,7 @@ fn numbers(mut input: &str) -> impl Iterator<Item = u32> {
             let head;
             (head, input) = input.split_at_checked(end)?;
 
-            let head = head.trim_start_matches(|c: char| !c.is_numeric());
+            let head = head.trim_matches(|c: char| !c.is_numeric());
 
             if let Ok(number) = head.parse() {
                 return Some(number);
