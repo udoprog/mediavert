@@ -15,29 +15,29 @@ pub struct State {
     /// The filesystem detected name of the series. These can be used to support
     /// an interactive session where you can for example pick names from a list.
     pub names: BTreeSet<String>,
-    /// The detected catalogs in the session.
-    pub catalogs: Vec<Catalog>,
+    /// The detected volumes in the session.
+    pub volumes: Vec<Volume>,
 }
 
 impl State {
-    /// Count the number of catalogs which have a picked book.
+    /// Count the number of volumes which have a picked book.
     #[inline]
     pub(crate) fn picked(&self) -> usize {
-        self.catalogs.iter().filter(|c| c.picked.is_some()).count()
+        self.volumes.iter().filter(|c| c.picked.is_some()).count()
     }
 }
 
-/// The state for a single catalog.
-pub struct Catalog {
-    /// The catalog number.
+/// The state for a single volume.
+pub struct Volume {
+    /// The volume number.
     pub number: u32,
-    /// The books in the catalog.
+    /// The books in the volume.
     pub books: Vec<Rc<Book>>,
     /// The picked book.
     pub picked: Option<usize>,
 }
 
-impl Catalog {
+impl Volume {
     /// Returns the selected book, if any.
     #[inline]
     pub fn selected(&self) -> Option<&Book> {

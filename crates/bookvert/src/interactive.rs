@@ -38,7 +38,7 @@ impl CatalogsView {
     fn update(&mut self, key: KeyEvent, state: &mut State) -> ViewEvent {
         use KeyCode::{Backspace, Char, Delete, Down, Enter, Esc, Right, Up};
 
-        let max_index = state.catalogs.len().saturating_add(1);
+        let max_index = state.volumes.len().saturating_add(1);
 
         match key.code {
             Up | Char('k') => {
@@ -52,7 +52,7 @@ impl CatalogsView {
                     let n = state.picked();
 
                     if n > 0 {
-                        if n < state.catalogs.len() {
+                        if n < state.volumes.len() {
                             return ViewEvent::PushView(View::Confirm(ConfirmView::default()));
                         }
 
@@ -63,7 +63,7 @@ impl CatalogsView {
                 } else {
                     let category = self.index.saturating_sub(2);
                     let index = state
-                        .catalogs
+                        .volumes
                         .get(category)
                         .and_then(|c| c.picked)
                         .unwrap_or(0);
@@ -79,7 +79,7 @@ impl CatalogsView {
             Delete | Backspace | Char('c') if self.index >= 2 => {
                 let category = self.index.saturating_sub(2);
 
-                if let Some(c) = state.catalogs.get_mut(category) {
+                if let Some(c) = state.volumes.get_mut(category) {
                     c.picked = None;
                 }
             }
@@ -95,7 +95,7 @@ impl CatalogsView {
         let sub_header = {
             let is_selected = self.index == 0;
             let picked_count = state.picked();
-            let total_count = state.catalogs.len();
+            let total_count = state.volumes.len();
             let all_picked = picked_count == total_count;
 
             let marker = STYLES.selected(is_selected);
@@ -131,9 +131,9 @@ impl CatalogsView {
 
         let mut items = Vec::new();
 
-        for (i, catalog) in state.catalogs.iter().enumerate() {
+        for (i, volume) in state.volumes.iter().enumerate() {
             let is_selected = i.saturating_add(2) == self.index;
-            let is_picked = catalog.picked.is_some();
+            let is_picked = volume.picked.is_some();
 
             if is_selected {
                 selected = Some(items.len());
@@ -142,8 +142,8 @@ impl CatalogsView {
             let marker = STYLES.selected(is_selected);
             let style = STYLES.item_style(is_selected, is_picked);
 
-            let picked_info = if let Some(picked) = catalog.picked {
-                if let Some(book) = catalog.books.get(picked) {
+            let picked_info = if let Some(picked) = volume.picked {
+                if let Some(book) = volume.books.get(picked) {
                     book.name.clone()
                 } else {
                     String::new()
@@ -153,7 +153,7 @@ impl CatalogsView {
             };
 
             let mut line = Line::from(vec![Span::styled(
-                format!("{marker} {}. {picked_info}", catalog.number),
+                format!("{marker} {}. {picked_info}", volume.number),
                 style,
             )]);
 
@@ -164,8 +164,8 @@ impl CatalogsView {
             line.push_span(Span::styled(
                 format!(
                     " ({} {})",
-                    catalog.books.len(),
-                    pluralize(catalog.books.len(), "book", "books")
+                    volume.books.len(),
+                    pluralize(volume.books.len(), "book", "books")
                 ),
                 STYLES.dim_style(),
             ));
@@ -241,18 +241,18 @@ impl BooksView {
                 self.index = self.index.saturating_sub(1);
             }
             Down | Char('j') => {
-                if let Some(catalog) = state.catalogs.get(self.category) {
+                if let Some(volume) = state.volumes.get(self.category) {
                     self.index = self
                         .index
                         .saturating_add(1)
-                        .min(catalog.books.len().saturating_sub(1));
+                        .min(volume.books.len().saturating_sub(1));
                 }
             }
             Left | Char('h') | Esc | Char('q') => {
                 return ViewEvent::PopView;
             }
             Enter | Char('o') => {
-                if let Some(c) = state.catalogs.get_mut(self.category) {
+                if let Some(c) = state.volumes.get_mut(self.category) {
                     c.picked = Some(self.index);
                 }
 
@@ -265,16 +265,16 @@ impl BooksView {
     }
 
     fn draw(&mut self, state: &State, frame: &mut Frame) {
-        let Some(catalog) = state.catalogs.get(self.category) else {
+        let Some(volume) = state.volumes.get(self.category) else {
             return;
         };
 
         let mut items = Vec::new();
         let mut selected = None;
 
-        for (i, book) in catalog.books.iter().enumerate() {
+        for (i, book) in volume.books.iter().enumerate() {
             let is_selected = i == self.index;
-            let is_picked = catalog.picked == Some(i);
+            let is_picked = volume.picked == Some(i);
 
             if is_selected {
                 selected = Some(items.len());
@@ -311,7 +311,7 @@ impl BooksView {
         let mut scrollbar_state = ScrollbarState::new(items.len())
             .position(self.list_state.selected().unwrap_or_default());
 
-        let line = format!("Catalog {:03} - Select book", catalog.number);
+        let line = format!("Catalog {:03} - Select book", volume.number);
         let line = Line::from(vec![
             Span::styled(line, STYLES.header_style()),
             Span::styled(
@@ -533,7 +533,7 @@ impl ConfirmView {
 
     fn draw(&mut self, state: &State, frame: &mut Frame) {
         let picked_count = state.picked();
-        let total_count = state.catalogs.len();
+        let total_count = state.volumes.len();
         let missing = total_count.saturating_sub(picked_count);
 
         let area = frame.area();
@@ -548,7 +548,7 @@ impl ConfirmView {
         let header = Line::from(vec![Span::styled("⚠ Warning", STYLES.warning_style())]);
 
         let message = Line::from(vec![Span::styled(
-            format!("Selection incomplete: {missing} catalog(s) not selected."),
+            format!("Selection incomplete: {missing} volume(s) not selected."),
             STYLES.warning_text_style(),
         )]);
 
@@ -632,7 +632,7 @@ impl App {
 
                     if let Some(View::Catalogs(v)) = self.views.last_mut()
                         && let Some(category) =
-                            state.catalogs.iter().position(|c| c.picked.is_none())
+                            state.volumes.iter().position(|c| c.picked.is_none())
                     {
                         v.index = category.saturating_add(2);
                         self.views.push(View::Books(BooksView::new(category, 0)));

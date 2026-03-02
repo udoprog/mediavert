@@ -22,7 +22,7 @@ use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipWriter};
 
 use crate::state::{BookSource, BookSourceType, PageMetadata};
-use crate::{App, Book, Catalog, Page, State};
+use crate::{App, Book, Volume, Page, State};
 
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
 enum BookLocation {
@@ -118,6 +118,9 @@ pub struct Bookvert {
     /// Summary/description for ComicInfo.xml metadata.
     #[arg(long)]
     summary: Option<String>,
+    /// The number of digits in the volume number to use. If set to 0, the width will be determined by the number of volumes.
+    #[arg(long, default_value_t = 3)]
+    volume_digits: usize,
     /// Directories to convert.
     path: Vec<PathBuf>,
 }
@@ -247,7 +250,7 @@ enum Pat {
 }
 
 impl Pat {
-    fn matches_catalog(&self, c: &Catalog) -> bool {
+    fn matches_volume(&self, c: &Volume) -> bool {
         match *self {
             Pat::Full => true,
             Pat::Regex(ref re) => c.books.iter().any(|b| re.is_match(&b.name)),
@@ -366,17 +369,17 @@ impl Picker {
     }
 
     /// Returns the index of the book to pick, or None if no predicate matched.
-    fn pick(&self, catalog: &Catalog) -> Option<usize> {
+    fn pick(&self, volume: &Volume) -> Option<usize> {
         for m in &self.matches {
-            if m.from.matches_catalog(catalog)
-                && let Some(index) = m.to.pick(&catalog.books)
+            if m.from.matches_volume(volume)
+                && let Some(index) = m.to.pick(&volume.books)
             {
                 return Some(index);
             }
         }
 
         for what in &self.catch_all {
-            if let Some(index) = what.pick(&catalog.books) {
+            if let Some(index) = what.pick(&volume.books) {
                 return Some(index);
             }
         }
@@ -635,19 +638,19 @@ pub fn entry(opts: &Bookvert) -> Result<()> {
     by_number.retain(|_, books| !books.is_empty());
 
     for (number, books) in by_number {
-        let mut catalog = Catalog {
+        let mut volume = Volume {
             number,
             books,
             picked: None,
         };
 
-        if catalog.books.len() == 1 {
-            catalog.picked = Some(0);
+        if volume.books.len() == 1 {
+            volume.picked = Some(0);
         } else {
-            catalog.picked = picker.pick(&catalog);
+            volume.picked = picker.pick(&volume);
         }
 
-        state.catalogs.push(catalog);
+        state.volumes.push(volume);
     }
 
     // Automatically determine name to use if possible.
@@ -684,8 +687,8 @@ pub fn entry(opts: &Bookvert) -> Result<()> {
             is_error = true;
         }
 
-        for catalog in &state.catalogs {
-            if catalog.picked.is_some() {
+        for volume in &state.volumes {
+            if volume.picked.is_some() {
                 continue;
             }
 
@@ -696,10 +699,10 @@ pub fn entry(opts: &Bookvert) -> Result<()> {
             writeln!(
                 o,
                 "{number:03}: more than one match, use something like `-p {number}=0` to pick one:",
-                number = catalog.number,
+                number = volume.number,
             )?;
 
-            for (idx, book) in catalog.books.iter().enumerate() {
+            for (idx, book) in volume.books.iter().enumerate() {
                 writeln!(
                     o,
                     "  {idx}: {} ({} pages, {} bytes)",
@@ -730,15 +733,21 @@ pub fn entry(opts: &Bookvert) -> Result<()> {
         }
     }
 
-    let catalog_name = state.name.context("No name specified for catalog")?;
+    let volume_name = state.name.context("No name specified for catalog")?;
 
-    for c in &state.catalogs {
+    let volume_digits = if opts.volume_digits == 0 {
+        usize::try_from(state.volumes.len().ilog10() + 1).unwrap_or(3)
+    } else {
+        opts.volume_digits
+    };
+
+    for c in &state.volumes {
         let Some(book) = c.selected() else {
             continue;
         };
 
         let mut target = opts.out.clone();
-        target.push(format!("{catalog_name} {:03}", c.number));
+        target.push(format!("{volume_name} {:0width$}", c.number, width = volume_digits));
         target.add_extension("cbz");
 
         let color = if opts.dry_run { &warn_col } else { &ok_col };
@@ -749,7 +758,7 @@ pub fn entry(opts: &Bookvert) -> Result<()> {
         writeln!(o, " {:03}: {}", c.number, book.source.path.display())?;
 
         let comic_info =
-            config_info(opts, &catalog_name, c, book).context("ComicInfo.xml generation")?;
+            config_info(opts, &volume_name, c, book).context("ComicInfo.xml generation")?;
 
         if opts.verbose {
             o.set_color(&ok_col)?;
@@ -894,7 +903,7 @@ fn numbers(mut input: &str) -> impl Iterator<Item = u32> {
 }
 
 /// Generates ComicInfo.xml content if any metadata options are provided.
-fn config_info(opts: &Bookvert, name: &str, catalog: &Catalog, book: &Book) -> Result<String> {
+fn config_info(opts: &Bookvert, name: &str, catalog: &Volume, book: &Book) -> Result<String> {
     let mut o = String::new();
 
     writeln!(o, "<?xml version=\"1.0\" encoding=\"utf-8\"?>")?;
