@@ -22,7 +22,7 @@ use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipWriter};
 
 use crate::state::{BookSource, BookSourceType, PageMetadata};
-use crate::{App, Book, Volume, Page, State};
+use crate::{App, Book, Page, State, Volume};
 
 #[derive(PartialEq, Eq, PartialOrd, Ord)]
 enum BookLocation {
@@ -747,7 +747,11 @@ pub fn entry(opts: &Bookvert) -> Result<()> {
         };
 
         let mut target = opts.out.clone();
-        target.push(format!("{volume_name} {:0width$}", c.number, width = volume_digits));
+        target.push(format!(
+            "{volume_name} {:0width$}",
+            c.number,
+            width = volume_digits
+        ));
         target.add_extension("cbz");
 
         let color = if opts.dry_run { &warn_col } else { &ok_col };

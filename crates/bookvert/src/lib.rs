@@ -82,7 +82,7 @@ mod interactive;
 use self::interactive::App;
 
 mod state;
-use self::state::{Book, Volume, Page, State};
+use self::state::{Book, Page, State, Volume};
 
 pub mod cli;
 mod styles;
