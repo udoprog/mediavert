@@ -31,15 +31,16 @@
 //! > cargo run --example examples
 //! > ```
 //!
-//! We then group all the books into *catalogues*. A catalogue is determine by
-//! all numerical components in the folder name of the book.
+//! We then group all the books into *volumes*. A volume is determine by all
+//! numerical components in the folder name of the book.
 //!
 //! So we run bookvert against the `examples` directory above and there are two
-//! folders which will be in catalogue #1. This then prompts `bookvert` to ask
-//! the user to select which one to use:
+//! folders which will be in volume #1. This then prompts `bookvert` to ask the
+//! user to select which one to use:
 //!
-//! ![catalogues](https://raw.githubusercontent.com/udoprog/bookvert/main/doc/showcase.png)
-//! ![select a book](https://raw.githubusercontent.com/udoprog/bookvert/main/doc/showcase2.png)
+//! ![volumes](https://raw.githubusercontent.com/udoprog/bookvert/main/doc/showcase.png)
+//! ![select a
+//! book](https://raw.githubusercontent.com/udoprog/bookvert/main/doc/showcase2.png)
 //!
 //! Once you are done, if you set the name to `That time I sorted books` and you
 //! select which directory to use for Chapter 1, bookvert will create `That time
@@ -51,8 +52,8 @@
 //! ## Policies
 //!
 //! If you don't like the interactive mode, you can set a pick policy using the
-//! `--pick` argument. This lets you specify how a book should be picked
-//! depending on which catalogue it is part of.
+//! `--pick / -p` argument. This lets you specify how a book should be picked
+//! depending on which volume it is part of.
 //!
 //! > For the most up-to-date information, se `--help`.
 //!
@@ -81,7 +82,7 @@ mod interactive;
 use self::interactive::App;
 
 mod state;
-use self::state::{Book, Catalog, Page, State};
+use self::state::{Book, Volume, Page, State};
 
 pub mod cli;
 mod styles;
