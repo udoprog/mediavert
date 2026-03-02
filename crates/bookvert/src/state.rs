@@ -57,10 +57,10 @@ pub struct PageMetadata {
 pub struct Page {
     /// The filesystem name of the page.
     pub path: RelativePathBuf,
-    /// The name of the page.
-    pub name: String,
     /// The filesystem metadata of the page.
     pub metadata: PageMetadata,
+    /// The extension of the page.
+    pub ext: &'static str,
 }
 
 /// The source of a book.

@@ -16,7 +16,7 @@ use clap::Parser;
 use ignore::Walk;
 use language_tags::LanguageTag;
 use regex::Regex;
-use relative_path::RelativePathBuf;
+use relative_path::{RelativePath, RelativePathBuf};
 use termcolor::{ColorSpec, StandardStream, WriteColor};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipWriter};
@@ -385,24 +385,37 @@ impl Picker {
     }
 }
 
-/// Accepted image file extensions.
-macro_rules! ext {
-    () => {
-        "jpg" | "png" | "gif" | "bmp" | "tif" | "webp" | "avif"
-    };
-}
-
-/// Translates certain extensions to their more common forms.
-fn translate(input: &str) -> &str {
-    if input.eq_ignore_ascii_case("jpeg") {
-        return "jpg";
+/// Coerce accepted file extensions into their canonical form.
+fn as_ext(ext: &str) -> Option<&'static str> {
+    if ext.eq_ignore_ascii_case("jpeg") || ext.eq_ignore_ascii_case("jpg") {
+        return Some("jpg");
     }
 
-    if input.eq_ignore_ascii_case("tiff") {
-        return "tif";
+    if ext.eq_ignore_ascii_case("tiff") || ext.eq_ignore_ascii_case("tif") {
+        return Some("tif");
     }
 
-    input
+    if ext.eq_ignore_ascii_case("png") {
+        return Some("png");
+    }
+
+    if ext.eq_ignore_ascii_case("gif") {
+        return Some("gif");
+    }
+
+    if ext.eq_ignore_ascii_case("bmp") {
+        return Some("bmp");
+    }
+
+    if ext.eq_ignore_ascii_case("webp") {
+        return Some("webp");
+    }
+
+    if ext.eq_ignore_ascii_case("avif") {
+        return Some("avif");
+    }
+
+    None
 }
 
 pub fn entry(opts: &Bookvert) -> Result<()> {
@@ -423,7 +436,7 @@ pub fn entry(opts: &Bookvert) -> Result<()> {
             .with_context(|| anyhow!("Parsing pick predicate '{}'", pat))?;
     }
 
-    let mut unsorted_files = Vec::new();
+    let mut files = Vec::new();
     let mut archives = Vec::new();
 
     for from_path in &opts.path {
@@ -448,25 +461,15 @@ pub fn entry(opts: &Bookvert) -> Result<()> {
                 continue;
             }
 
-            let ext = path
-                .extension()
-                .and_then(|e| e.to_str())
-                .map(translate)
-                .map(|e| e.to_lowercase());
-
-            let Some(ext) = ext else {
+            let Some(ext) = path.extension().and_then(OsStr::to_str).and_then(as_ext) else {
                 continue;
             };
 
-            if !matches!(ext.as_str(), ext!()) {
-                continue;
-            }
-
-            unsorted_files.push((from_path, path, ext));
+            files.push((from_path, path, ext));
         }
     }
 
-    unsorted_files.sort();
+    files.sort();
 
     let o = StandardStream::stdout(termcolor::ColorChoice::Auto);
     let mut o = o.lock();
@@ -475,7 +478,7 @@ pub fn entry(opts: &Bookvert) -> Result<()> {
     let mut by_number = BTreeMap::<_, Vec<_>>::new();
     let mut state = State::default();
 
-    for (from_path, from, ext) in &unsorted_files {
+    for (from_path, from, ext) in &files {
         let Some(dir) = from.parent() else {
             continue;
         };
@@ -484,11 +487,11 @@ pub fn entry(opts: &Bookvert) -> Result<()> {
             continue;
         };
 
-        let Some(path) = from.file_name() else {
-            continue;
-        };
-
-        let Ok(path) = RelativePathBuf::from_path(path) else {
+        let Some(path) = from
+            .file_name()
+            .and_then(OsStr::to_str)
+            .map(RelativePath::new)
+        else {
             continue;
         };
 
@@ -520,22 +523,18 @@ pub fn entry(opts: &Bookvert) -> Result<()> {
         };
 
         book.pages.push(Page {
-            path,
-            name: format!("p{:03}.{ext}", book.pages.len()),
+            path: path.to_owned(),
             metadata,
+            ext,
         });
     }
 
-    for (from, archive) in archives {
-        let Some(from_name) = from.file_stem().and_then(OsStr::to_str) else {
-            continue;
-        };
-
+    for (archive_path, archive) in archives {
         let mut pages = Vec::new();
 
-        let result = archive.enumerate(&from, &mut |path, m| {
-            if matches!(path.extension(), Some(ext!())) {
-                pages.push((path.to_owned(), m));
+        let result = archive.enumerate(&archive_path, &mut |path, m| {
+            if let Some(ext) = path.extension().and_then(as_ext) {
+                pages.push((path.to_owned(), m, ext));
             }
 
             Ok(())
@@ -549,53 +548,47 @@ pub fn entry(opts: &Bookvert) -> Result<()> {
             continue;
         }
 
-        pages.sort_by(|a, b| a.0.cmp(&b.0));
+        pages.sort_by(|(a, ..), (b, ..)| a.cmp(b));
 
         let mut books_by_dir = BTreeMap::new();
 
-        for (path, m) in pages {
-            let Some(ext) = path.extension() else {
-                continue;
-            };
-
+        for (path, m, ext) in pages {
             let Some(dir) = path.parent() else {
                 continue;
             };
 
-            let Some(dir_name) = dir.file_name() else {
-                continue;
-            };
-
-            let mut numbers = self::numbers(dir_name).collect::<BTreeSet<_>>();
-
-            if numbers.is_empty() {
-                for n in self::numbers(from_name) {
-                    numbers.insert(n);
-                }
-            }
-
             let book = books_by_dir.entry(dir.to_owned()).or_insert_with(|| Book {
                 source: BookSource {
-                    path: from.to_owned(),
+                    path: archive_path.to_owned(),
                     kind: BookSourceType::Archive(archive),
                 },
                 name: dir.to_string(),
                 pages: Vec::new(),
-                numbers,
+                numbers: BTreeSet::new(),
             });
-
-            let name = format!("p{:03}.{ext}", book.pages.len());
 
             book.pages.push(Page {
                 path,
-                name,
                 metadata: PageMetadata { size: m.size },
+                ext,
             });
         }
 
-        for (dir, book) in books_by_dir {
+        // If there is only one directory in the archive, then we use the
+        // archive name to determine the book number.
+        let archive_name = if books_by_dir.len() <= 1 {
+            archive_path.file_stem().and_then(OsStr::to_str)
+        } else {
+            None
+        };
+
+        for (dir, mut book) in books_by_dir {
+            if let Some(name) = archive_name.or_else(|| dir.file_name()) {
+                book.numbers = numbers(name).collect();
+            }
+
             let location = BookLocation::Archive {
-                path: from.to_owned(),
+                path: archive_path.to_owned(),
                 archive,
                 dir,
             };
@@ -623,11 +616,9 @@ pub fn entry(opts: &Bookvert) -> Result<()> {
             books.retain(|book| {
                 opts.include
                     .iter()
-                    .any(|predicate| predicate.matches(&book.name, number))
+                    .any(|pat| pat.matches(&book.name, number))
             });
         }
-
-        by_number.retain(|_, books| !books.is_empty());
     }
 
     if !opts.exclude.is_empty() {
@@ -636,12 +627,12 @@ pub fn entry(opts: &Bookvert) -> Result<()> {
                 !opts
                     .exclude
                     .iter()
-                    .any(|predicate| predicate.matches(&book.name, number))
+                    .any(|pat| pat.matches(&book.name, number))
             });
         }
-
-        by_number.retain(|_, books| !books.is_empty());
     }
+
+    by_number.retain(|_, books| !books.is_empty());
 
     for (number, books) in by_number {
         let mut catalog = Catalog {
@@ -739,7 +730,7 @@ pub fn entry(opts: &Bookvert) -> Result<()> {
         }
     }
 
-    let name = state.name.context("No name specified for catalog")?;
+    let catalog_name = state.name.context("No name specified for catalog")?;
 
     for c in &state.catalogs {
         let Some(book) = c.selected() else {
@@ -747,7 +738,7 @@ pub fn entry(opts: &Bookvert) -> Result<()> {
         };
 
         let mut target = opts.out.clone();
-        target.push(format!("{name} {:03}", c.number));
+        target.push(format!("{catalog_name} {:03}", c.number));
         target.add_extension("cbz");
 
         let color = if opts.dry_run { &warn_col } else { &ok_col };
@@ -757,7 +748,8 @@ pub fn entry(opts: &Bookvert) -> Result<()> {
 
         writeln!(o, " {:03}: {}", c.number, book.source.path.display())?;
 
-        let comic_info = config_info(opts, &name, c, book).context("ComicInfo.xml generation")?;
+        let comic_info =
+            config_info(opts, &catalog_name, c, book).context("ComicInfo.xml generation")?;
 
         if opts.verbose {
             o.set_color(&ok_col)?;
@@ -790,8 +782,12 @@ pub fn entry(opts: &Bookvert) -> Result<()> {
         let mut pages_by_path = book
             .pages
             .iter()
-            .map(|p| (p.path.as_relative_path(), p))
+            .enumerate()
+            .map(|(index, p)| (p.path.as_relative_path(), (index, p)))
             .collect::<BTreeMap<_, _>>();
+
+        // Get the number of page digits needed to fit all pages.
+        let page_digits = book.pages.len().max(1).ilog10() as usize + 1;
 
         let mut err = None::<anyhow::Error>;
         let mut contents = Vec::new();
@@ -801,14 +797,16 @@ pub fn entry(opts: &Bookvert) -> Result<()> {
                 return Ok(());
             };
 
-            let Some(page) = pages_by_path.remove(path) else {
+            let Some((index, page)) = pages_by_path.remove(path) else {
                 return Ok(());
             };
 
             contents.clear();
             e.read_to_end(&mut contents)?;
 
-            if let Err(e) = w.start_file(&page.name, options) {
+            let name = format!("p{index:0width$}.{}", page.ext, width = page_digits);
+
+            if let Err(e) = w.start_file(&name, options) {
                 err = Some(e.into());
                 return Ok(());
             }
@@ -827,7 +825,7 @@ pub fn entry(opts: &Bookvert) -> Result<()> {
 
         let mut error = false;
 
-        for (_, page) in pages_by_path {
+        for (_, (_, page)) in pages_by_path {
             o.set_color(&err_col)?;
             write!(o, "  [missing] ")?;
             o.reset()?;

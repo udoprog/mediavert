@@ -315,7 +315,7 @@ impl BooksView {
         let line = Line::from(vec![
             Span::styled(line, STYLES.header_style()),
             Span::styled(
-                " (enter/o to pick, esc/q/← to go back, i/I to show paths)",
+                " (enter/o to pick, esc/q/← to go back)",
                 STYLES.header_hint_style(),
             ),
         ]);
